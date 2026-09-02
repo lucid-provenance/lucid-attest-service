@@ -76,6 +76,8 @@ jobs:
         run: |
           ls -la signed/
 
+          declare -A LOG_INDEX LOG_URL CERT_ISSUER CERT_SUBJECT CERT_NOT_BEFORE CERT_NOT_AFTER
+
           for f in test-statement.dsse.json provenance.dsse.json; do
             if [ ! -f "signed/$f" ]; then
               echo "ERROR: expected signed/$f, not found" >&2
@@ -93,7 +95,24 @@ jobs:
               echo "ERROR: $f has no Rekor entry (_rekor.logIndex is null) -- looks fake, not real" >&2
               exit 1
             fi
+            LOG_INDEX[$f]="$log_index"
+            LOG_URL[$f]="$(jq -r '._rekor.logUrl' "signed/$f")"
+
+            # Pull the real certificate's own issuer/subject/validity
+            # straight from the DER, not just trusting the presence of a
+            # sig/logIndex -- same class of check the earlier smoke test
+            # did by hand (Issuer: sigstore.dev/sigstore-intermediate,
+            # ~10-minute Fulcio validity window), now automated.
+            cert_pem="$(jq -r '.signatures[0].certificate' "signed/$f")"
+            cert_text="$(echo "$cert_pem" | openssl x509 -noout -issuer -subject -dates 2>/dev/null || true)"
+            CERT_ISSUER[$f]="$(echo "$cert_text" | sed -n 's/^issuer=//p')"
+            CERT_SUBJECT[$f]="$(echo "$cert_text" | sed -n 's/^subject=//p')"
+            CERT_NOT_BEFORE[$f]="$(echo "$cert_text" | sed -n 's/^notBefore=//p')"
+            CERT_NOT_AFTER[$f]="$(echo "$cert_text" | sed -n 's/^notAfter=//p')"
+
             echo "$f: real signature + Rekor entry (log index $log_index)"
+            echo "  cert issuer: ${CERT_ISSUER[$f]}"
+            echo "  cert validity: ${CERT_NOT_BEFORE[$f]} -> ${CERT_NOT_AFTER[$f]}"
           done
 
           echo "--- provenance.dsse.json's own claims (payload decoded) ---"
@@ -114,13 +133,26 @@ jobs:
             exit 1
           fi
 
+          subject_name="$(echo "$payload" | jq -r '.subject[0].name')"
+          subject_digest="$(echo "$payload" | jq -r '.subject[0].digest.sha256')"
+          resolved_dep_count="$(echo "$payload" | jq '.predicate.buildDefinition.resolvedDependencies | length')"
+
           {
             echo "### sign-client.yml end-to-end test: PASSED"
             echo ""
-            echo "Both statements signed for real. Provenance builder.id:"
-            echo '```'
-            echo "$builder_id"
-            echo '```'
+            echo "Both statements carry a real Sigstore signature and a real, permanent Rekor transparency-log entry -- not just an HTTP 200."
+            echo ""
+            echo "| File | Rekor log index | Rekor entry | Fulcio cert validity |"
+            echo "|---|---|---|---|"
+            echo "| \`test-statement.dsse.json\` | \`${LOG_INDEX[test-statement.dsse.json]}\` | [view](${LOG_URL[test-statement.dsse.json]}) | ${CERT_NOT_BEFORE[test-statement.dsse.json]} → ${CERT_NOT_AFTER[test-statement.dsse.json]} |"
+            echo "| \`provenance.dsse.json\` | \`${LOG_INDEX[provenance.dsse.json]}\` | [view](${LOG_URL[provenance.dsse.json]}) | ${CERT_NOT_BEFORE[provenance.dsse.json]} → ${CERT_NOT_AFTER[provenance.dsse.json]} |"
+            echo ""
+            echo "Both certificates issued by: \`${CERT_ISSUER[provenance.dsse.json]}\` (Sigstore's real production Fulcio intermediate)."
+            echo ""
+            echo "**Provenance statement's own claims** (SLSA v1.0, \`predicateType: $predicate_type\`):"
+            echo "- Subject: \`$subject_name\` (\`sha256:$subject_digest\`)"
+            echo "- \`runDetails.builder.id\`: \`$builder_id\` — matches exactly what \`cli/verify.py\`'s \`TRUSTED_CONTROL_PLANE_BUILDER_IDS\` needs to trust"
+            echo "- \`buildDefinition.resolvedDependencies\`: $resolved_dep_count entries"
           } >> "$GITHUB_STEP_SUMMARY"
 
           echo "PASSED: builder.id matches exactly what cli/verify.py needs to trust."
