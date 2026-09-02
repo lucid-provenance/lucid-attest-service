@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .env
+.coverage
+.pytest_cache/
 
 # Build-time-only: deploy.yml's checkout of the pinned lucid-assay signer
 # source (never committed here) and the narrow cli/oidc_signer.py file
