@@ -28,35 +28,18 @@ jobs:
       contents: read
 
     steps:
-      # Mirrors cli.oidc_signer.fetch_ambient_oidc_token()'s own request
-      # shape exactly (audience "sigstore", `Authorization: bearer
-      # <request-token>` -- lowercase "bearer", matching that function's
-      # own header) -- this workflow *is* the caller lucid-attest-service
-      # expects to have already done this itself before calling
-      # POST /v1/sign.
+      # Needed so the local composite action below (a real file in this
+      # checkout, not a published marketplace action) is actually present
+      # on the runner's filesystem.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # This workflow *is* the caller lucid-attest-service expects to
+      # have already minted its own ambient OIDC identity before calling
+      # POST /v1/sign -- see the composite action's own header for the
+      # exact request shape this mirrors.
       - name: Mint ambient OIDC identity token (audience sigstore)
         id: oidc
-        # ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN are NOT workflow env-context
-        # values -- they're real process environment variables the runner
-        # itself injects because this job has id-token: write, already
-        # directly visible to this run: step's shell without any env:
-        # mapping (the same reason sign.yml's `docker run -e
-        # ACTIONS_ID_TOKEN_REQUEST_URL` -- a bare -e, no =value -- works:
-        # it forwards this exact ambient value).
-        run: |
-          response="$(curl -sf \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sigstore")"
-          token="$(echo "$response" | jq -r '.value')"
-          if [ -z "$token" ] || [ "$token" = "null" ]; then
-            echo "ERROR: failed to mint an ambient OIDC token" >&2
-            exit 1
-          fi
-          # Never echo the token itself to logs -- GitHub's own log
-          # masking covers registered secrets, not an ad hoc value like
-          # this, so length-only is printed as a sanity signal instead.
-          echo "Minted a token (${#token} chars)"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/mint-sigstore-oidc-token
 
       # A minimal, structurally valid in-toto Statement -- not a real
       # lucid-assay-produced RCS predicate, since proving the sign path

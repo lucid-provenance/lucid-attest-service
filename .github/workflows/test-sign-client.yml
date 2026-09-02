@@ -1,0 +1,126 @@
+name: Test Sign (client) end to end
+
+# Manual-only, real proof that sign-client.yml itself actually works --
+# both halves of what it does: SLSA provenance construction AND signing
+# via the Lambda, exercised through the exact reusable-workflow `uses:`
+# path a real caller (e.g. lucid-console) would take. Never runs on
+# push/pull_request, same reason as smoke-test-sign.yml: every
+# successful run mints real, permanent, public Rekor entries (two of
+# them here -- one per statement).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # Plays the role of a caller's own `build` job: produces an unsigned
+  # statement and uploads it as an artifact -- no id-token: write here at
+  # all, proving that permission never needs to reach this job, only
+  # sign-client.yml's own.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write a fake unsigned statement
+        run: |
+          mkdir -p unsigned
+          cat > unsigned/test-statement.unsigned.json <<'EOF'
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"name": "sign-client-test", "digest": {"sha256": "0000000000000000000000000000000000000000000000000000000000000000"}}],
+            "predicateType": "https://lucid-provenance.io/attestations/smoke-test/v1",
+            "predicate": {"note": "sign-client.yml end-to-end test, not a real RCS predicate"}
+          }
+          EOF
+
+      - name: Upload unsigned statement
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-statements
+          path: unsigned/test-statement.unsigned.json
+          if-no-files-found: error
+
+  # The actual thing under test -- called exactly the way a real caller
+  # would, subject-name/subject-digest set to opt into provenance
+  # construction so both code paths inside sign-client.yml run.
+  sign:
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/sign-client.yml
+    with:
+      artifact-name: unsigned-statements
+      statement-files: |
+        test-statement.unsigned.json
+      subject-name: lucid-attest-service-sign-client-test
+      subject-digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+
+  # Real verification, not just "the reusable workflow didn't error":
+  # confirms both expected files came back, each with a genuine Sigstore
+  # signature and Rekor entry, and that the provenance statement's
+  # builder.id matches what cli/verify.py's TRUSTED_CONTROL_PLANE_BUILDER_IDS
+  # is expected to trust -- a mismatch here would mean the cutover PR to
+  # lucid-assay is pointed at the wrong string.
+  verify:
+    needs: sign
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: signed-statements
+          path: signed
+
+      - name: Verify both envelopes are real
+        run: |
+          ls -la signed/
+
+          for f in test-statement.dsse.json provenance.dsse.json; do
+            if [ ! -f "signed/$f" ]; then
+              echo "ERROR: expected signed/$f, not found" >&2
+              exit 1
+            fi
+
+            sig="$(jq -r '.signatures[0].sig' "signed/$f")"
+            if [ -z "$sig" ] || [ "$sig" = "null" ]; then
+              echo "ERROR: $f has no signature" >&2
+              exit 1
+            fi
+
+            log_index="$(jq -r '._rekor.logIndex' "signed/$f")"
+            if [ -z "$log_index" ] || [ "$log_index" = "null" ]; then
+              echo "ERROR: $f has no Rekor entry (_rekor.logIndex is null) -- looks fake, not real" >&2
+              exit 1
+            fi
+            echo "$f: real signature + Rekor entry (log index $log_index)"
+          done
+
+          echo "--- provenance.dsse.json's own claims (payload decoded) ---"
+          payload="$(jq -r '.payload' signed/provenance.dsse.json | base64 -d)"
+          echo "$payload" | jq .
+
+          predicate_type="$(echo "$payload" | jq -r '.predicateType')"
+          if [ "$predicate_type" != "https://slsa.dev/provenance/v1" ]; then
+            echo "ERROR: expected SLSA v1.0 predicateType, got $predicate_type" >&2
+            exit 1
+          fi
+
+          builder_id="$(echo "$payload" | jq -r '.predicate.runDetails.builder.id')"
+          expected="https://github.com/lucid-provenance/lucid-attest-service/.github/workflows/sign-client.yml"
+          if [ "$builder_id" != "$expected" ]; then
+            echo "ERROR: builder.id mismatch -- got $builder_id, expected $expected" >&2
+            echo "This is the exact string cli/verify.py's TRUSTED_CONTROL_PLANE_BUILDER_IDS must match." >&2
+            exit 1
+          fi
+
+          {
+            echo "### sign-client.yml end-to-end test: PASSED"
+            echo ""
+            echo "Both statements signed for real. Provenance builder.id:"
+            echo '```'
+            echo "$builder_id"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "PASSED: builder.id matches exactly what cli/verify.py needs to trust."

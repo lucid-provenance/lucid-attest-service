@@ -52,6 +52,59 @@ out which entries actually got signed.
 | 401 | missing/malformed `Authorization` header |
 | 502 | Sigstore signing failed for one or more statements — message names which index and why |
 
+## Adopting this service: `sign-client.yml`
+
+Callers should adopt this service via `.github/workflows/sign-client.yml`
+(a reusable `workflow_call` workflow), **not** by inlining a token-mint +
+`curl POST /v1/sign` step directly into their own workflow file. This
+isn't a style preference — it's load-bearing: GitHub's OIDC
+`job_workflow_ref` claim (and hence the Fulcio certificate identity
+Sigstore issues) reflects *this file's own path* for a job that mints
+its own token inside a reusable-workflow invocation, regardless of which
+repo's `uses:` line called it. That's what lets a single,
+individually-reviewed entry in `lucid-assay`'s `cli/verify.py`
+(`TRUSTED_CONTROL_PLANE_BUILDER_IDS`) trust every caller of this file —
+inlining the same logic into each caller's own workflow instead would
+make every caller's own file its own unreviewed identity, which
+`cli/verify.py` has no sound way to trust at scale. See the Lucid
+vault's "Serverless signer needs a trustworthy provenance builder
+identity" note for the full reasoning.
+
+`sign-client.yml` is structurally the same role `lucid-attest`'s own
+`sign.yml` plays today: given `subject-name`/`subject-digest`, it
+constructs real SLSA v1.0 provenance (Build Level 3) from its own
+trusted context (`cli.provenance`, checked out from a pinned
+`lucid-assay` SHA — pure stdlib, no dependency install needed) before
+signing both the caller's statement(s) and the provenance atomically —
+same input/output contract as `sign.yml` (`artifact-name`,
+`statement-files`, optional `subject-name`/`subject-digest`, outputs
+`artifact-name: signed-statements`), so adopting it from an existing
+`sign.yml` caller is a `uses:` swap, not a rewrite:
+
+```yaml
+attest:
+  needs: build
+  permissions:
+    id-token: write
+    contents: read
+  uses: lucid-provenance/lucid-attest-service/.github/workflows/sign-client.yml@<pinned-sha>
+  with:
+    artifact-name: unsigned-statements
+    statement-files: |
+      my-repo.unsigned.json
+    subject-name: ${{ needs.build.outputs.image-ref }}
+    subject-digest: ${{ needs.build.outputs.image-digest }}
+```
+
+`.github/workflows/test-sign-client.yml` (`workflow_dispatch`-only, same
+real-Rekor-entry caution as the smoke test) exercises the whole chain
+end to end — a fake `build` job with no `id-token: write` at all, a real
+`sign-client.yml` call with provenance construction opted in, and a
+`verify` job confirming both resulting envelopes carry genuine
+signatures/Rekor entries and that the provenance statement's
+`runDetails.builder.id` matches exactly what `cli/verify.py` needs to
+trust.
+
 ## Deploy
 
 GitHub Actions (`.github/workflows/deploy.yml`) deploys on every push to
