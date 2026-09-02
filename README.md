@@ -72,6 +72,18 @@ the deploy role deliberately has no `s3:CreateBucket` permission, since
 bucket creation is a rarer, more sensitive operation kept as a human,
 out-of-band step rather than something CI can do itself.
 
+## Smoke testing against the real deployed endpoint
+
+`.github/workflows/smoke-test-sign.yml` (manual `workflow_dispatch`
+only, never on push/PR — every successful run mints a real, permanent,
+public Rekor transparency-log entry) mints its own ambient GitHub
+Actions OIDC token, forwards it to the live `POST /v1/sign` endpoint the
+same way any real caller would, and verifies the response is a genuine
+signed envelope (a real Sigstore signature and a non-null Rekor log
+index/URL, not just an HTTP 200). This is also the platform's first real
+"thin client snippet" — the pattern any future GitHub Actions caller
+adopting this service would copy.
+
 ## Local development
 
 Vendor the signer source by hand first (mirrors what `deploy.yml` does
