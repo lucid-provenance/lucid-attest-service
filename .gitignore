@@ -2,3 +2,13 @@
 __pycache__/
 *.pyc
 .env
+
+# Build-time-only: deploy.yml's checkout of the pinned lucid-assay signer
+# source (never committed here) and the narrow cli/oidc_signer.py file
+# list it vendors into src/cli/ (regenerated fresh on every deploy from
+# that pin -- see deploy.yml's "Vendor pinned cli.oidc_signer" step and
+# its own comment for why this is never a static copy checked into this
+# repo). A local dev run reproduces the same two steps by hand -- see
+# README's "Local development" section.
+_signer/
+src/cli/
