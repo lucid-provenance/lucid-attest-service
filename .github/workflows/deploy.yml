@@ -31,7 +31,7 @@ env:
   # input, same discipline as lucid-attest's own SIGNER_SOURCE_SHA: which
   # lucid-assay commit's signing code this service runs is a deliberate,
   # reviewable commit to *this* file, not a caller-controlled value.
-  SIGNER_SOURCE_SHA: "e7f2245"
+  SIGNER_SOURCE_SHA: "e7f224511ec68b0a342400cb837e1dee27abf133"
 
 jobs:
   deploy:
