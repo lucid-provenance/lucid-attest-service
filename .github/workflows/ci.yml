@@ -1,0 +1,68 @@
+name: CI
+
+# Runs on every pull request (plus every push to main, for
+# defense-in-depth) -- lints the SAM template and runs the handler test
+# suite against the same narrow-vendored cli.oidc_signer this repo
+# actually deploys with. No AWS credentials, no id-token: write, nothing
+# a fork PR can't run safely -- tests/test_app.py mocks every Sigstore
+# library call itself (see that file's own docstring).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Mirrors deploy.yml's own pin -- see that file's comment for what this
+  # governs and why it's a hardcoded literal, never a workflow input.
+  # Bump both together.
+  SIGNER_SOURCE_SHA: "e7f2245"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lucid-attest-service (this repo)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Checkout pinned lucid-assay signer source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: lucid-provenance/lucid-assay
+          ref: ${{ env.SIGNER_SOURCE_SHA }}
+          path: _signer
+          persist-credentials: false
+
+      - name: Vendor pinned cli.oidc_signer into src/cli/
+        run: |
+          mkdir -p src/cli
+          cp _signer/cli/__init__.py    src/cli/__init__.py
+          cp _signer/cli/common.py      src/cli/common.py
+          cp _signer/cli/oidc_signer.py src/cli/oidc_signer.py
+
+      # No actions/setup-python here, deliberately: lucid-assay's own
+      # requires-python floor is >=3.10 (3.13 is only the *Lambda
+      # runtime's* pin, in template.yaml -- unrelated to a language-syntax
+      # requirement this test job needs to match), so ubuntu-latest's
+      # ambient python3 is sufficient. Avoids pinning a setup-python
+      # commit SHA that can't be verified from this environment.
+      - name: Install runtime + test dependencies
+        run: |
+          python3 -m pip install --require-hashes -r src/requirements.txt
+          python3 -m pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python3 -m pytest -v tests/
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: aws-actions/setup-sam@f84ec7d548307efafe33230528756de3c5841a17 # v2
+      # --lint: pure local template linting (cfn-lint), no CloudFormation
+      # ValidateTemplate API call -- deliberately needs no AWS credentials
+      # at all, so this job stays safe to run on a fork PR.
+      - run: sam validate --lint
