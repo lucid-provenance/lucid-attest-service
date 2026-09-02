@@ -1,0 +1,6 @@
+# Test-only tooling -- not part of the Lambda's own runtime dependency
+# closure (src/requirements.txt), so deliberately not hash-pinned the
+# same way: pytest never ships in the deployed package, it only runs
+# inside CI's own throwaway environment. Version floor matches
+# lucid-assay's own dev-extras convention.
+pytest>=7.0.0

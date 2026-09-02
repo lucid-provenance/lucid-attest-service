@@ -1,10 +1,17 @@
 name: Deploy
 
-# Phase 1: deploys the placeholder SAM stack via GitHub Actions OIDC --
-# no static AWS keys anywhere, matching the ambient-OIDC discipline this
-# platform already uses for Sigstore keyless signing and GitHub App
-# tokens for branch governance. See the Lucid vault's #12 milestone note
-# for the deploy role's trust policy and permissions scope.
+# Deploys the SAM stack via GitHub Actions OIDC -- no static AWS keys
+# anywhere, matching the ambient-OIDC discipline this platform already
+# uses for Sigstore keyless signing and GitHub App tokens for branch
+# governance. See the Lucid vault's #12 milestone note for the deploy
+# role's trust policy and permissions scope.
+#
+# Phase 2: also vendors lucid-assay's cli.oidc_signer at a pinned source
+# SHA, the same narrow-file, build-time-checkout pattern lucid-attest's
+# own Milestone #18 build-signer-image.yml uses (see that workflow for
+# the precedent this mirrors) -- reproduced fresh from the pinned commit
+# on every deploy, never a copy committed into this repo that could
+# silently drift from what its own comment claims.
 
 on:
   push:
@@ -15,11 +22,53 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  # lucid-assay main, 2026-09-02: "Add optional identity_token param to
+  # oidc_signer's sign_statement/sign_file_to_envelope" (PR #57, merge
+  # commit e7f2245) -- the commit that made sign_statement() usable by a
+  # caller that isn't itself the CI runner holding the ambient OIDC
+  # environment. A hardcoded literal here, never a workflow_dispatch
+  # input, same discipline as lucid-attest's own SIGNER_SOURCE_SHA: which
+  # lucid-assay commit's signing code this service runs is a deliberate,
+  # reviewable commit to *this* file, not a caller-controlled value.
+  SIGNER_SOURCE_SHA: "e7f224511ec68b0a342400cb837e1dee27abf133"
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Checkout lucid-attest-service (this repo)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # Read-only checkout of the one lucid-assay commit this deploy
+      # trusts -- see env.SIGNER_SOURCE_SHA's own comment above for why
+      # it can never be a workflow input. Nothing from lucid-assay is
+      # executed by this workflow itself; only the three files copied
+      # below ever ship in the Lambda's own deployment package.
+      - name: Checkout pinned lucid-assay signer source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: lucid-provenance/lucid-assay
+          ref: ${{ env.SIGNER_SOURCE_SHA }}
+          path: _signer
+          persist-credentials: false
+
+      # The narrow file list -- verified empirically (not just by reading
+      # imports): `python3 -c "import cli.oidc_signer"` against
+      # lucid-assay's own source loads exactly cli/__init__.py and
+      # cli/common.py from this codebase, nothing else. This Lambda only
+      # ever calls sign_statement() on bytes it already has in memory --
+      # narrower than lucid-attest's own Milestone #18 Dockerfile list,
+      # which also carries cli/sign.py, cli/provenance.py,
+      # cli/slsa_provenance.py, and cli/parsers/lockfiles.py for that
+      # image's broader file-based CLI-subcommand surface, none of which
+      # this service uses or needs.
+      - name: Vendor pinned cli.oidc_signer into src/cli/
+        run: |
+          mkdir -p src/cli
+          cp _signer/cli/__init__.py    src/cli/__init__.py
+          cp _signer/cli/common.py      src/cli/common.py
+          cp _signer/cli/oidc_signer.py src/cli/oidc_signer.py
 
       - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
