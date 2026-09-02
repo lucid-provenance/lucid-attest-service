@@ -7,7 +7,7 @@ workflow every tenant CI platform runs today. Evolves out of
 repo's `sign.yml` and Milestone #18 Dockerfile for the signing logic and
 narrow-vendoring discipline this service builds on.
 
-## Status: Phase 2 — real signing
+## Status: Phase 2 — real signing, proven live in production
 
 `POST /v1/sign` calls straight into `cli.oidc_signer.sign_statement`,
 vendored at deploy time from a pinned `lucid-assay` source SHA
@@ -22,6 +22,15 @@ bytes it already has in memory, never the file-based
 `cli/parsers/lockfiles.py` aren't needed here). Never returns a
 fabricated placeholder on a failure path — see `src/app.py`'s module
 docstring.
+
+**Adopted in production, 2026-09-02**: `lucid-console` and
+`lucid-dsse-collector` both cut over their `attest` job from
+`lucid-attest`'s `sign.yml` to `sign-client.yml` the same day, replacing
+`lucid-attest`'s pinned Docker signer container entirely for those two
+repos. Both real cutovers, not just `test-sign-client.yml`'s synthetic
+self-test, immediately surfaced two real bugs `sign-client.yml`'s own
+self-test couldn't have caught (see "Adopting this service" below for
+what they were and the minimum safe pin) — both fixed same day.
 
 ## Request shape
 
@@ -82,19 +91,63 @@ same input/output contract as `sign.yml` (`artifact-name`,
 `sign.yml` caller is a `uses:` swap, not a rewrite:
 
 ```yaml
-attest:
-  needs: build
-  permissions:
-    id-token: write
-    contents: read
-  uses: lucid-provenance/lucid-attest-service/.github/workflows/sign-client.yml@<pinned-sha>
-  with:
-    artifact-name: unsigned-statements
-    statement-files: |
-      my-repo.unsigned.json
-    subject-name: ${{ needs.build.outputs.image-ref }}
-    subject-digest: ${{ needs.build.outputs.image-digest }}
+jobs:
+  attest:
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+    # This line is the SOLE source of truth for the pinned signer commit --
+    # see the verify-job snippet below for why nothing else should
+    # duplicate it as a separately hand-kept-in-sync literal.
+    uses: lucid-provenance/lucid-attest-service/.github/workflows/sign-client.yml@<pinned-sha>
+    with:
+      artifact-name: unsigned-statements
+      statement-files: |
+        my-repo.unsigned.json
+      subject-name: ${{ needs.build.outputs.image-ref }}
+      subject-digest: ${{ needs.build.outputs.image-digest }}
 ```
+
+**Deriving `--cert-identity` for your own `verify` job: don't duplicate
+the pin.** GitHub Actions won't accept an expression in a reusable-
+workflow `uses:` line, which makes it tempting to also keep the SHA in a
+separate `env:` var for `--cert-identity` to read — don't; a Dependabot
+bump PR (see below) only ever touches the `uses:` line itself, and a
+separately-maintained copy will silently go stale the moment one lands,
+turning into a confusing identity-verification failure instead of a
+clean bump. Parse the `attest` job's own `uses:` line at runtime instead
+— `lucid-assay`, `lucid-console`, and `lucid-dsse-collector`'s own
+`assay.yml` files all do exactly this (a `Derive expected signer
+identity from the attest job's own uses: pin` step early in `verify`,
+scoped to their own well-known job shape) — copy that pattern rather
+than reinventing it.
+
+**Tagged releases: `v1.0.0` baseline as of 2026-09-02.** Pin to an exact
+commit SHA (not `@main` — see the note above on why that would defeat
+the trust model). This repo now has a real tag for Dependabot's
+`github-actions` ecosystem to bump toward — see `.github/dependabot.yml`
+— but a bump PR still needs a human to merge it; nothing here auto-applies.
+
+**Minimum safe pin, as of 2026-09-02: `231039b08b91b78788dba732a10355aafcaeaa11`.**
+Anything before that has one of two real bugs found by this service's
+first genuine external callers, neither of which `test-sign-client.yml`'s
+synthetic self-test could catch (caller and callee are the same repo
+there):
+
+- **PR #8** — the composite action step referenced
+  `mint-sigstore-oidc-token` via a local `./` path, which resolves
+  against a checkout of `${{ github.repository }}` — inside a
+  `workflow_call` job, that reflects the *caller's* repo, not this one.
+  Broke immediately on `lucid-console`'s first real run. Fixed by
+  referencing the composite action remotely
+  (`owner/repo/path@sha`) instead.
+- **PR #9** — the signing step passed the whole batch payload to
+  `curl -d "$batch"`, a literal shell argument. A real statement (e.g. a
+  lockfile-derived `resolved_dependencies` list plus its provenance
+  sibling) can exceed the kernel's `ARG_MAX` this way — "Argument list
+  too long", exit 126. Fixed by writing the batch to a file and posting
+  it via `curl --data-binary @file` instead.
 
 `.github/workflows/test-sign-client.yml` (`workflow_dispatch`-only, same
 real-Rekor-entry caution as the smoke test) exercises the whole chain
