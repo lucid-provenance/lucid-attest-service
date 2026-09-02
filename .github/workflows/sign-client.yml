@@ -224,14 +224,23 @@ jobs:
           # jq -s (slurp): reads each file as one JSON value and wraps
           # them all into a single top-level array, in argument order --
           # exactly the batch shape lucid-attest-service's POST /v1/sign
-          # expects.
-          batch="$(jq -s '.' "${input_paths[@]}")"
+          # expects. Written straight to a file, never held in a shell
+          # variable -- a real statement (e.g. a lockfile-derived
+          # resolved_dependencies list) plus its provenance sibling can
+          # exceed the kernel's execve() argument+environment size limit
+          # (ARG_MAX) when passed as `curl -d "$batch"`, which fails as
+          # "Argument list too long" (exit 126). test-sign-client.yml's
+          # fake statement is tiny and never exercised this; lucid-console's
+          # real statement did, immediately. curl --data-binary @file reads
+          # the payload from disk instead, with no argument-length limit
+          # and no byte-mangling (unlike -d, which strips CRs).
+          jq -s '.' "${input_paths[@]}" > batch.json
 
           http_code="$(curl -sS -o response.json -w '%{http_code}' \
             -X POST "$SIGN_ENDPOINT" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
-            -d "$batch")"
+            --data-binary @batch.json)"
 
           if [ "$http_code" != "200" ]; then
             echo "ERROR: lucid-attest-service returned HTTP $http_code:" >&2
