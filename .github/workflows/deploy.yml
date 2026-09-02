@@ -35,10 +35,19 @@ jobs:
       # at all -- bucket creation is a one-time, human, out-of-band step).
       # Letting SAM auto-manage its own bucket would pick a name this
       # policy was never scoped to and fail closed with AccessDenied.
+      #
+      # Bucket created 2026-09-02 in S3's account-Regional namespace (AWS's
+      # current recommended default over the classic global namespace) --
+      # that namespace always appends an account+region suffix to whatever
+      # prefix you type, so the real bucket name isn't the bare
+      # "lucid-attest-service-sam-artifacts" prefix, it's the full name
+      # below, exactly as the console computed it. --s3-prefix (SAM's own
+      # object-key prefix *inside* the bucket, unrelated to S3's bucket-
+      # namespace prefix above) is untouched.
       - run: |
           sam deploy \
             --stack-name lucid-attest-service \
-            --s3-bucket lucid-attest-service-sam-artifacts \
+            --s3-bucket lucid-attest-service-sam-artifacts-133307902115-us-east-1-an \
             --s3-prefix lucid-attest-service \
             --capabilities CAPABILITY_IAM \
             --no-confirm-changeset \

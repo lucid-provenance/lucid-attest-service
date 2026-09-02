@@ -34,9 +34,11 @@ call vs one per envelope," for why.
 GitHub Actions (`.github/workflows/deploy.yml`) deploys on every push to
 `main`, via OIDC — no local `sam deploy` credentials needed for normal
 use. One manual, one-time prerequisite: the SAM artifacts bucket
-(`lucid-attest-service-sam-artifacts`, `us-east-1`) must exist before the
-first deploy — the deploy role deliberately has no `s3:CreateBucket`
-permission, since bucket creation is a rarer, more sensitive operation
-kept as a human, out-of-band step rather than something CI can do itself.
+(`lucid-attest-service-sam-artifacts-133307902115-us-east-1-an`,
+`us-east-1` — created in S3's account-Regional namespace, hence the
+account+region suffix on the name) must exist before the first deploy —
+the deploy role deliberately has no `s3:CreateBucket` permission, since
+bucket creation is a rarer, more sensitive operation kept as a human,
+out-of-band step rather than something CI can do itself.
 
 Local development: `sam build && sam local invoke SignFunction`.
