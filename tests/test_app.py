@@ -188,6 +188,19 @@ class SigningFailureTests(unittest.TestCase):
             r = app.handler(_event([_STATEMENT], {"authorization": "Bearer t"}), None)
         self.assertNotIn("envelopes", json.loads(r["body"]))
 
+    def test_ambient_identity_error_gets_its_own_diagnostic_not_the_generic_one(self):
+        """Defensive branch: _extract_identity_token already guarantees a
+        non-empty token reaches _sign_batch, so sign_statement() should
+        never actually fall through to its own ambient-fetch path and
+        raise AmbientIdentityError here -- but if it somehow did (e.g. a
+        future sign_statement() change), that's a distinct, worth-its-own-
+        message failure mode from a generic signing error, not something
+        to silently fold into the same branch."""
+        with mock.patch("app.sign_statement", side_effect=app.AmbientIdentityError("no token found")):
+            r = app.handler(_event([_STATEMENT], {"authorization": "Bearer t"}), None)
+        self.assertEqual(r["statusCode"], 502)
+        self.assertIn("no usable identity token reached Sigstore", json.loads(r["body"])["message"])
+
 
 if __name__ == "__main__":
     unittest.main()
