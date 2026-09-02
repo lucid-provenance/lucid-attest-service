@@ -105,7 +105,7 @@ jobs:
       # opt into provenance construction (no subject-name given).
       - name: Checkout Caller Source (read-only, for dependency scanning only)
         if: inputs.subject-name != ''
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository }}
           ref: ${{ github.sha }}
@@ -114,7 +114,7 @@ jobs:
 
       - name: Checkout pinned lucid-assay (cli.provenance only)
         if: inputs.subject-name != ''
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: lucid-provenance/lucid-assay
           ref: ${{ env.PROVENANCE_SOURCE_SHA }}
