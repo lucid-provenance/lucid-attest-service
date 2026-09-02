@@ -94,12 +94,6 @@ jobs:
       contents: read
 
     steps:
-      # Needed for the local composite action below (mint-sigstore-oidc-
-      # token) to be present on the runner, and to construct provenance
-      # against this file's own scripts/helpers if any are added later.
-      - name: Checkout lucid-attest-service (this repo)
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
       # Read-only, for lockfile scanning ONLY -- nothing from this
       # checkout is ever executed (no build/test/install step touches
       # it). github.sha here is the *calling* workflow run's own commit
@@ -161,9 +155,23 @@ jobs:
       # identity -- see the composite action's own header for the exact
       # request shape this mirrors (cli.oidc_signer.fetch_ambient_oidc_token()'s
       # own, audience "sigstore").
+      #
+      # Referenced remotely (owner/repo/path@sha), NOT via a local `./`
+      # path -- a local reference resolves relative to a checkout of
+      # `github.repository`, which inside a workflow_call job reflects
+      # the CALLER's repo (lucid-console, lucid-dsse-collector, ...), not
+      # this one, the same context-inheritance gotcha this file's header
+      # already documents for github.sha/github.repository generally.
+      # `./mint-sigstore-oidc-token` worked by pure coincidence in
+      # test-sign-client.yml (caller and callee are both this same repo
+      # there) and broke immediately on the first real external caller
+      # (lucid-console, 2026-09-02: "Can't find 'action.yml' ... under
+      # .../lucid-console/.github/actions/mint-sigstore-oidc-token").
+      # Remote-referencing needs no self-checkout step at all -- simpler
+      # than reproducing PROVENANCE_SOURCE_SHA's self-pin pattern here.
       - name: Mint ambient OIDC identity token (audience sigstore)
         id: oidc
-        uses: ./.github/actions/mint-sigstore-oidc-token
+        uses: lucid-provenance/lucid-attest-service/.github/actions/mint-sigstore-oidc-token@69f843991419df4d9180a981e3bcbd96a927f7a2
 
       # Builds one JSON array from every file the caller named (plus the
       # just-constructed provenance statement, if any -- appended here,
