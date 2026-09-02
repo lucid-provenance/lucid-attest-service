@@ -70,7 +70,7 @@ jobs:
           cp _signer/cli/common.py      src/cli/common.py
           cp _signer/cli/oidc_signer.py src/cli/oidc_signer.py
 
-      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: arn:aws:iam::133307902115:role/lucid-attest-service-deploy
           aws-region: us-east-1
