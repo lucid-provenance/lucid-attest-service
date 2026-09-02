@@ -28,7 +28,21 @@ jobs:
 
       - uses: aws-actions/setup-sam@f84ec7d548307efafe33230528756de3c5841a17 # v2
 
-      - run: sam build
+      # --use-container: builds inside SAM's own public.ecr.aws/sam/
+      # build-python3.13 image, matching Lambda's actual Amazon Linux 2023
+      # execution environment, rather than a local (host-Python) build.
+      # ubuntu-latest has Docker preinstalled, so this needs no extra
+      # runner setup. A plain local `sam build` failed here outright --
+      # SAM's PythonPipBuilder validates the interpreter on PATH against
+      # the pinned runtime (python3.13) and ubuntu-latest's default
+      # python3 doesn't satisfy that -- but the deeper reason to prefer
+      # --use-container over pinning a matching interpreter via
+      # actions/setup-python is Phase 2: once real dependencies with
+      # compiled C extensions (sigstore-python, cryptography, ...) land
+      # in src/requirements.txt, building on Ubuntu's glibc instead of
+      # Lambda's own runtime image risks a binary that resolves and
+      # builds fine here but subtly mismatches at execution time.
+      - run: sam build --use-container
 
       # --s3-bucket named explicitly, not --resolve-s3: the deploy role's
       # IAM policy is scoped to this one bucket by name (no s3:CreateBucket
