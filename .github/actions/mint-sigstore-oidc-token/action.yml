@@ -1,0 +1,35 @@
+name: Mint Sigstore OIDC Token
+description: >
+  Mints this job's own ambient GitHub Actions OIDC identity token
+  (audience "sigstore"), mirroring lucid-assay's
+  cli.oidc_signer.fetch_ambient_oidc_token()'s exact request shape
+  (audience param, `Authorization: bearer <request-token>` -- lowercase
+  "bearer", matching that function's own header). Requires the calling
+  job to have `permissions: id-token: write` -- this action does not,
+  and cannot, grant that itself; ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN are
+  real process environment variables the runner injects only when that
+  permission is present, already directly visible to this action's shell
+  without any explicit env: mapping.
+outputs:
+  token:
+    description: "The minted OIDC identity token"
+    value: ${{ steps.mint.outputs.token }}
+runs:
+  using: composite
+  steps:
+    - id: mint
+      shell: bash
+      run: |
+        response="$(curl -sf \
+          -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sigstore")"
+        token="$(echo "$response" | jq -r '.value')"
+        if [ -z "$token" ] || [ "$token" = "null" ]; then
+          echo "ERROR: failed to mint an ambient OIDC token -- is permissions: id-token: write set on this job?" >&2
+          exit 1
+        fi
+        # Never echo the token itself to logs -- GitHub's own log masking
+        # covers registered secrets, not an ad hoc value like this, so
+        # length-only is printed as a sanity signal instead.
+        echo "Minted a token (${#token} chars)"
+        echo "token=$token" >> "$GITHUB_OUTPUT"
