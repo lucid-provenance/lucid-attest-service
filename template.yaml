@@ -1,0 +1,51 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  lucid-attest-service -- serverless signing endpoint (Lucid roadmap #12).
+
+  Phase 1 scaffold: proves the Lambda + HTTP API + GitHub-OIDC deploy
+  pipeline works end to end, with a placeholder handler. Real signing
+  logic (vendored from lucid-assay's cli.oidc_signer.sign_file_to_envelope,
+  pinned by source SHA, mirroring lucid-attest's own Milestone #18
+  Dockerfile discipline) is a deliberate follow-up pass, not rushed into
+  this one -- see that repo's Dockerfile for the vendoring pattern this
+  will reuse.
+
+  Stack MUST be deployed as exactly "lucid-attest-service" -- the deploy
+  role's CloudFormation permissions are scoped to a stack of that exact
+  name (see lucid-attest-service-deploy-permissions in the Lucid vault's
+  #12 milestone note).
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.13
+    Architectures:
+      - x86_64
+
+Resources:
+  SignFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lucid-attest-service-sign
+      CodeUri: src/
+      Handler: app.handler
+      Description: >
+        Placeholder handler -- Phase 1 only. Validates request shape and
+        echoes a stub response; does not sign anything yet. See the
+        module docstring in src/app.py.
+      Events:
+        Sign:
+          Type: HttpApi
+          Properties:
+            Path: /v1/sign
+            Method: post
+
+Outputs:
+  SignEndpoint:
+    Description: "POST /v1/sign endpoint (HTTP API)"
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/v1/sign"
+  SignFunctionArn:
+    Description: "Lambda function ARN"
+    Value: !GetAtt SignFunction.Arn

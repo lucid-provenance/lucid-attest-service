@@ -1,0 +1,5 @@
+# Phase 1: standard library only, nothing to pin yet.
+# Phase 2 will vendor lucid-assay's own hash-pinned dependency closure
+# for cli.oidc_signer, the same way lucid-attest's Milestone #18
+# Dockerfile does (uv export --frozen -> pip install --require-hashes) --
+# not a plain unpinned requirements.txt, when that lands.
