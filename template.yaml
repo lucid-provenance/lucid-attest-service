@@ -22,6 +22,18 @@ Globals:
     Runtime: python3.13
     Architectures:
       - x86_64
+    # HOME=/tmp -- confirmed necessary via a real invocation, not
+    # anticipated speculatively: sigstore-python (by way of a transitive
+    # dep, tuf/securesystemslib) wants to write TUF trust-root cache data
+    # under $HOME, and AWS Lambda's default HOME
+    # (/home/sbx_user1051-shaped) sits on a read-only filesystem -- only
+    # /tmp is writable in a Lambda execution environment. Exact same fix,
+    # same root cause, as lucid-attest's own Milestone #18 signer image
+    # hit and documented at length in its Dockerfile (that image also
+    # sets HOME=/tmp for the identical reason).
+    Environment:
+      Variables:
+        HOME: /tmp
 
 Resources:
   SignFunction:
