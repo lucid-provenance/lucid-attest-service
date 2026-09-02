@@ -1,0 +1,143 @@
+name: Smoke Test (real sign)
+
+# Manual-only: proves the whole loop -- GitHub Actions mints its own real
+# ambient OIDC token (audience "sigstore"), forwards it to the deployed
+# POST /v1/sign endpoint via Authorization: Bearer, and the Lambda signs
+# a real statement through actual Fulcio/Rekor. This is deliberately the
+# first real "thin client snippet" the Lucid vault's #12 milestone note
+# calls for (GitHub Action step / GitLab CI job template / ... that mint
+# ambient OIDC and POST the unsigned predicate) -- built here first, as a
+# self-test against this repo's own deployed endpoint, before any other
+# repo's real CI adopts it.
+#
+# Never runs on push/pull_request: every successful run mints a real,
+# permanent, public Rekor transparency-log entry -- not something to fire
+# on every commit.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required to mint the ambient OIDC token below -- no other job/step in this workflow needs it
+      contents: read
+
+    steps:
+      # Mirrors cli.oidc_signer.fetch_ambient_oidc_token()'s own request
+      # shape exactly (audience "sigstore", `Authorization: bearer
+      # <request-token>` -- lowercase "bearer", matching that function's
+      # own header) -- this workflow *is* the caller lucid-attest-service
+      # expects to have already done this itself before calling
+      # POST /v1/sign.
+      - name: Mint ambient OIDC identity token (audience sigstore)
+        id: oidc
+        # ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN are NOT workflow env-context
+        # values -- they're real process environment variables the runner
+        # itself injects because this job has id-token: write, already
+        # directly visible to this run: step's shell without any env:
+        # mapping (the same reason sign.yml's `docker run -e
+        # ACTIONS_ID_TOKEN_REQUEST_URL` -- a bare -e, no =value -- works:
+        # it forwards this exact ambient value).
+        run: |
+          response="$(curl -sf \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sigstore")"
+          token="$(echo "$response" | jq -r '.value')"
+          if [ -z "$token" ] || [ "$token" = "null" ]; then
+            echo "ERROR: failed to mint an ambient OIDC token" >&2
+            exit 1
+          fi
+          # Never echo the token itself to logs -- GitHub's own log
+          # masking covers registered secrets, not an ad hoc value like
+          # this, so length-only is printed as a sanity signal instead.
+          echo "Minted a token (${#token} chars)"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      # A minimal, structurally valid in-toto Statement -- not a real
+      # lucid-assay-produced RCS predicate, since proving the sign path
+      # round-trips end to end doesn't need one. subject digest is a
+      # fixed, obviously-synthetic value (never mistaken for a real
+      # artifact's hash).
+      #
+      # SIGN_ENDPOINT is this stack's known, stable HTTP API URL (an HTTP
+      # API's endpoint doesn't change across deploys to the same stack,
+      # only if the stack were deleted and recreated) -- if it ever does
+      # change, the current value is always available via this stack's
+      # own CloudFormation Outputs (`aws cloudformation describe-stacks
+      # --stack-name lucid-attest-service --query
+      # "Stacks[0].Outputs[?OutputKey=='SignEndpoint'].OutputValue"`).
+      - name: POST a real statement to /v1/sign
+        id: sign
+        env:
+          SIGN_ENDPOINT: https://84qfszyk5h.execute-api.us-east-1.amazonaws.com/v1/sign
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          statement='[{
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"name": "lucid-attest-service-smoke-test", "digest": {"sha256": "'"$(printf 'smoke-test' | sha256sum | cut -d" " -f1)"'"}}],
+            "predicateType": "https://lucid-provenance.io/attestations/smoke-test/v1",
+            "predicate": {"note": "manual smoke test, not a real RCS predicate", "run_id": "${{ github.run_id }}"}
+          }]'
+
+          http_code="$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$SIGN_ENDPOINT" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -d "$statement")"
+
+          echo "HTTP status: $http_code"
+          cat response.json
+          echo
+
+          if [ "$http_code" != "200" ]; then
+            echo "ERROR: expected HTTP 200, got $http_code" >&2
+            exit 1
+          fi
+          echo "http_code=$http_code" >> "$GITHUB_OUTPUT"
+
+      # Real verification, not just "got a 200": confirms a genuine
+      # signature and a real Rekor transparency-log entry are actually
+      # present -- a 200 with an empty/malformed body would otherwise
+      # slip through undetected.
+      - name: Verify the response is a real signed envelope
+        run: |
+          envelope_count="$(jq '.envelopes | length' response.json)"
+          if [ "$envelope_count" != "1" ]; then
+            echo "ERROR: expected exactly 1 envelope, got $envelope_count" >&2
+            exit 1
+          fi
+
+          payload_type="$(jq -r '.envelopes[0].payloadType' response.json)"
+          if [ "$payload_type" != "application/vnd.in-toto+json" ]; then
+            echo "ERROR: unexpected payloadType: $payload_type" >&2
+            exit 1
+          fi
+
+          sig="$(jq -r '.envelopes[0].signatures[0].sig' response.json)"
+          if [ -z "$sig" ] || [ "$sig" = "null" ]; then
+            echo "ERROR: no signature present in the response" >&2
+            exit 1
+          fi
+
+          log_index="$(jq -r '.envelopes[0]._rekor.logIndex' response.json)"
+          log_url="$(jq -r '.envelopes[0]._rekor.logUrl' response.json)"
+          if [ -z "$log_index" ] || [ "$log_index" = "null" ]; then
+            echo "ERROR: no Rekor transparency-log entry (_rekor.logIndex is null) -- this looks like a dry-run or fake response, not a real sign" >&2
+            exit 1
+          fi
+
+          {
+            echo "### Smoke test: real sign confirmed"
+            echo ""
+            echo "A genuine Sigstore signature and Rekor transparency-log entry were produced:"
+            echo ""
+            echo "- Rekor log index: \`$log_index\`"
+            echo "- Rekor entry: $log_url"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Real sign confirmed. Rekor entry: $log_url"
