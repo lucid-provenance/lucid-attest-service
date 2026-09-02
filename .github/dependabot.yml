@@ -1,0 +1,11 @@
+# Tracks every SHA-pinned `uses:` in this repo's own workflow files
+# (third-party actions, e.g. actions/checkout) against their upstream
+# tagged releases -- opens a PR here proposing the bump, never merges
+# automatically. Requires a real reviewed merge before any pin actually
+# moves, same discipline as every hand-authored bump in this platform.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
