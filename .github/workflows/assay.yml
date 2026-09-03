@@ -169,6 +169,55 @@ jobs:
         uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
       - run: sam validate --lint
 
+      # Generates a canonical CycloneDX SBOM of this repo via Syft, fed to
+      # lucid-assay below via --sbom -- closes S2C2F SCA-2 ("License
+      # Checks") and backs INV-1/ING-1 from a real, native SBOM. Same
+      # recipe as lucid-console's own copy of this step (verified working
+      # there first) -- --exclude './_assay/**' for the same reason: left
+      # unscoped, Syft would also catalog _assay/'s own checkout (its
+      # pyproject.toml, and every package installed into its .venv by `uv
+      # sync` above) as if those were this repo's own components. Placed
+      # before "Build SAM package" so .aws-sam/build/ doesn't exist yet
+      # either -- nothing to exclude there since it's just not present.
+      #
+      # Same digest-verification discipline as lucid-console's own pin:
+      # confirmed directly against GHCR's own API, not copied from an
+      # unverified source.
+      - name: Generate CycloneDX SBOM (Syft)
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            ghcr.io/anchore/syft@sha256:95fe0835e5bebc6f8b1f8acef68d47d63d594ef4c0f25c097ff853b23cbac74c \
+            dir:. --exclude './_assay/**' -o cyclonedx-json=build/sbom.cdx.json
+          test -s build/sbom.cdx.json || { echo "ERROR: Syft did not produce build/sbom.cdx.json" >&2; exit 1; }
+
+      # Platform-agnostic vulnerability scan via Grype, pointed at the SBOM
+      # Syft just generated -- same recipe as lucid-console's own copy of
+      # this step, including its two real fixes: GRYPE_DB_CACHE_DIR and
+      # TMPDIR both redirected (the non-root --user override has no
+      # writable $HOME for either the vulnerability-DB cache or Grype's
+      # own DB-update-check temp file -- see lucid-console's own comment
+      # for the exact failure this closes, confirmed via a real run
+      # there). Named accurately, not "vulnerability and EOL scan": Grype
+      # does not detect EOL/unmaintained packages -- see lucid-console's
+      # own comment for why, confirmed against Grype's own SARIF presenter
+      # source.
+      - name: Scan for vulnerabilities (Grype)
+        run: |
+          mkdir -p build/.grype-db-cache build/.grype-tmp
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e GRYPE_DB_CACHE_DIR=/workspace/build/.grype-db-cache \
+            -e TMPDIR=/workspace/build/.grype-tmp \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            ghcr.io/anchore/grype@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7 \
+            sbom:build/sbom.cdx.json \
+            -o sarif=build/grype.sarif
+          test -s build/grype.sarif || { echo "ERROR: Grype did not produce build/grype.sarif" >&2; exit 1; }
+
       # --use-container: matches deploy.yml's own real build exactly (see
       # that workflow's own comment for why -- Lambda's actual Amazon
       # Linux 2023 execution environment, not ubuntu-latest's glibc) --
@@ -254,6 +303,8 @@ jobs:
             --junit-xml "$GITHUB_WORKSPACE/build/junit.xml" \
             --coverage-report "$GITHUB_WORKSPACE/build/coverage.xml" \
             --coverage-format cobertura \
+            --sbom "$GITHUB_WORKSPACE/build/sbom.cdx.json" \
+            --sarif "$GITHUB_WORKSPACE/build/grype.sarif" \
             --subject-name "$SUBJECT_NAME" \
             --subject-digest "$SUBJECT_DIGEST" \
             --head-sha "${HEAD_SHA}" \
@@ -264,11 +315,22 @@ jobs:
             --out "$GITHUB_WORKSPACE/build/lucid-attest-service.unsigned.json" \
             "${EXTRA_ARGS[@]}"
 
+          # --sbom above also makes cli.main write a *second*, separate
+          # in-toto statement wrapping the SBOM's own raw document --
+          # same fixed-basename-sibling-of-out convention lucid-console's
+          # own copy of this check documents.
+          test -s "$GITHUB_WORKSPACE/build/sbom.unsigned.json" || {
+            echo "ERROR: --sbom was passed but build/sbom.unsigned.json was not produced (see the mint step's own stderr WARNING above for why)" >&2
+            exit 1
+          }
+
       - name: Upload unsigned statements
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: unsigned-statements
-          path: build/lucid-attest-service.unsigned.json
+          path: |
+            build/lucid-attest-service.unsigned.json
+            build/sbom.unsigned.json
           if-no-files-found: error
 
   # The only job with id-token: write. Signs the assay/v1 RCS statement
@@ -286,6 +348,7 @@ jobs:
       artifact-name: unsigned-statements
       statement-files: |
         lucid-attest-service.unsigned.json
+        sbom.unsigned.json
       subject-name: ${{ needs.build.outputs.subject-name }}
       subject-digest: ${{ needs.build.outputs.subject-digest }}
 
@@ -392,4 +455,5 @@ jobs:
           path: |
             build/lucid-attest-service.dsse.json
             build/provenance.dsse.json
+            build/sbom.dsse.json
           if-no-files-found: error
