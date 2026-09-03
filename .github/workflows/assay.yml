@@ -115,14 +115,27 @@ jobs:
         working-directory: _assay
         run: uv sync --frozen --extra dev
 
-      # lucid-assay's own dependency-lockfile detector walks --repo-dir
-      # recursively at any depth, skipping only a fixed name list that
-      # doesn't include "_assay" -- same fix every other repo in this
-      # platform already carries for the identical bug class (confirmed
-      # there via a real run: lucid-assay's own ~90 Python packages
+      # lucid-assay's own dependency-lockfile detector AND its AST
+      # test-suite walker both walk --repo-dir recursively at any depth,
+      # neither skipping "_assay" -- same fix every other repo in this
+      # platform already carries for the lockfile half (confirmed there
+      # via a real run: lucid-assay's own ~90 Python packages
       # materializing as if they were the calling repo's own).
-      - name: Remove lucid-assay's own lockfile from the dependency scan
-        run: rm -f _assay/uv.lock
+      #
+      # rm -rf _assay/tests is the newly-added half, confirmed necessary
+      # by this repo's own first real run: predicate.test_verification
+      # reported 985 "valid" test functions against a repo whose actual
+      # test suite (tests/test_app.py) has 16 -- cli.parsers.ast's own
+      # SKIP_DIR_NAMES (cli/parsers/ast/common.py) has no entry for a
+      # caller-chosen checkout path like "_assay" either, so it silently
+      # walked into _assay/tests/ and counted lucid-assay's own ~1035
+      # test functions as this repo's. Safe to delete outright (not just
+      # exclude): verified nothing under cli/ references its own tests/
+      # directory at runtime, and `uv run --no-sync` executes the
+      # already-synced venv's installed package, never re-parses this
+      # source tree's own tests/ directory for anything.
+      - name: Remove lucid-assay's own lockfile and tests from the scan
+        run: rm -f _assay/uv.lock && rm -rf _assay/tests
 
       # Same file list, same rationale as ci.yml's own "Vendor pinned
       # cli.oidc_signer into src/cli/" step -- reused here rather than a
