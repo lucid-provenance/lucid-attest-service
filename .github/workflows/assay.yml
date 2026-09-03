@@ -1,0 +1,382 @@
+name: Lucid Assay (dogfood)
+
+# Runs this repo's own real build through the real Lucid platform:
+# lucid-assay scores it into a Release Confidence Score attestation,
+# this repo's own already-deployed sign-client.yml signs it via Sigstore
+# keyless OIDC (and constructs real SLSA v1.0 provenance for it, Build
+# Level 3, inside that isolated signer job), and the verify job runs the
+# same admission gate a downstream consumer would run.
+#
+# FIRST REAL RUN FOR THIS REPO -- unlike lucid-assay/lucid-console/
+# lucid-dsse-collector's own copies of this file, there is no prior
+# observed RCS baseline to tune --min-rcs against yet (see those repos'
+# own header comments for how theirs got set only after a real run, not
+# guessed up front). Left at a true placeholder (0) below deliberately --
+# raise it once a real score is observed, same methodology, not before.
+#
+# NOT A CONTAINER: this repo deploys a zip-based AWS SAM Lambda
+# (`sam build` -> `sam deploy`), unlike every other repo's own copy of
+# this file. --subject-name/--subject-digest (not --image-ref/--image-
+# digest) describe the actual SAM-built Lambda function package instead
+# -- see the "Build SAM package" step below for exactly what's hashed
+# and why.
+#
+# Blocked until 2026-09-02 by cli.main requiring a container-image
+# subject (--image-ref/--image-digest, both required=True) -- resolved
+# the same day by generalizing to --subject-name/--subject-digest. Was
+# unblocked but never actually wired in until now -- see the Lucid
+# vault's lucid-attest-service repo note, "Known gaps".
+#
+# Deliberately does NOT self-reference an in-review/unmerged version of
+# this repo's own sign-client.yml: the `attest` job's `uses:` pin below
+# is the same already-deployed, already-trusted commit every external
+# caller (lucid-console, lucid-dsse-collector) currently points at, not
+# `@main` or this run's own commit SHA. An in-flight PR to this repo
+# using its own not-yet-reviewed code to sign its own dogfood attestation
+# would let that PR forge its own "verified" badge -- exactly the
+# caller-chosen-code problem the whole isolated-signer design exists to
+# prevent, just self-inflicted instead of external.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: {}
+
+# No id-token: write at the workflow level -- granted only to `attest`.
+# `build` runs this repo's own tests and builds its real SAM package; it
+# must never be able to reach the Sigstore signing credential itself, and
+# critically must never gain AWS credentials either (unlike deploy.yml,
+# this workflow never calls aws-actions/configure-aws-credentials at all
+# -- the SAM build step below is purely local, no AWS API calls).
+permissions:
+  contents: read
+
+# ASSAY_CLI_SHA: which lucid-assay commit this repo's own dogfood run
+# vendors cli.oidc_signer from (for the test suite, mirroring ci.yml's
+# own step) and runs cli.main/cli.verify from. Independently pinned here
+# from ci.yml's own SIGNER_SOURCE_SHA and sign-client.yml's own
+# PROVENANCE_SOURCE_SHA -- yes, a third same-repo copy of a value that's
+# currently identical to both of theirs. Known, not an oversight: see the
+# Lucid vault's "Signer SHA pinning pain" note for why a shared
+# Repository Actions Variable would collapse this (and those two) into
+# one source of truth with no real downside, and why that wasn't done as
+# a silent side effect of adding this file -- it changes two other
+# already-working workflows' own pinning discipline, which deserves its
+# own deliberate PR, not a drive-by bundled into new work.
+env:
+  ASSAY_CLI_SHA: 23c719bcf086488dd6aa37ade085791a8c63f75e # lucid-assay main: PR #73 (SBOM attestation, hash anchoring, granular SARIF severity rollups), 2026-09-03
+
+jobs:
+  # Runs this repo's own tests (against the same vendored cli.oidc_signer
+  # ci.yml already tests), builds the real SAM package this repo deploys,
+  # and mints an *unsigned* RCS attestation over it. No id-token
+  # permission here at all, and no AWS credentials either.
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # "Resolve PR Context for a Push-Triggered Run" below
+    outputs:
+      subject-name: ${{ steps.subject.outputs.subject-name }}
+      subject-digest: ${{ steps.subject.outputs.subject-digest }}
+
+    steps:
+      # github.sha alone is correct for every trigger this workflow has:
+      # a pull_request event's default is the refs/pull/N/merge preview
+      # commit; a push event's is the actual commit that landed on main.
+      - name: Checkout lucid-attest-service (this repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history needed for patch-coverage diff
+
+      - name: Checkout pinned lucid-assay CLI
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lucid-provenance/lucid-assay
+          ref: ${{ env.ASSAY_CLI_SHA }}
+          path: _assay
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: "_assay/uv.lock"
+
+      - name: Install lucid-assay dependencies
+        working-directory: _assay
+        run: uv sync --frozen --extra dev
+
+      # lucid-assay's own dependency-lockfile detector walks --repo-dir
+      # recursively at any depth, skipping only a fixed name list that
+      # doesn't include "_assay" -- same fix every other repo in this
+      # platform already carries for the identical bug class (confirmed
+      # there via a real run: lucid-assay's own ~90 Python packages
+      # materializing as if they were the calling repo's own).
+      - name: Remove lucid-assay's own lockfile from the dependency scan
+        run: rm -f _assay/uv.lock
+
+      # Same file list, same rationale as ci.yml's own "Vendor pinned
+      # cli.oidc_signer into src/cli/" step -- reused here rather than a
+      # second, separately-pinned checkout, since this workflow already
+      # has _assay/ checked out at the same commit for cli.main/
+      # cli.verify above. Needed so the test suite below runs against
+      # real code, the same way ci.yml's own run does.
+      - name: Vendor pinned cli.oidc_signer into src/cli/
+        run: |
+          mkdir -p src/cli
+          cp _assay/cli/__init__.py    src/cli/__init__.py
+          cp _assay/cli/common.py      src/cli/common.py
+          cp _assay/cli/oidc_signer.py src/cli/oidc_signer.py
+
+      - name: Install runtime + test dependencies
+        run: |
+          python3 -m pip install --require-hashes -r src/requirements.txt
+          python3 -m pip install -r requirements-dev.txt
+
+      # --junitxml/--cov feed lucid-assay's own --junit-xml/--coverage-
+      # report below -- ci.yml's own `python3 -m pytest -v tests/` never
+      # needed either, since it doesn't mint an attestation. pytest-cov's
+      # XML report is Cobertura-shaped (the --coverage-format default),
+      # not a separate flag to add.
+      - name: Run tests with coverage
+        run: |
+          mkdir -p build
+          python3 -m pytest -v --junitxml=build/junit.xml --cov=src --cov-report=xml:build/coverage.xml tests/
+
+      - name: Lint SAM template
+        uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
+      - run: sam validate --lint
+
+      # --use-container: matches deploy.yml's own real build exactly (see
+      # that workflow's own comment for why -- Lambda's actual Amazon
+      # Linux 2023 execution environment, not ubuntu-latest's glibc) --
+      # so the attestation subject below genuinely reflects what would
+      # ship, not a faster-but-different local build. No AWS credentials
+      # needed for this step; only sam deploy (not called here) does.
+      - name: Build SAM package
+        run: sam build --use-container
+
+      # The attestation subject: a deterministic SHA-256 of the actual
+      # built Lambda function package's contents -- the closest honest
+      # equivalent to another repo's own container image digest, for an
+      # artifact that isn't a container. `tar --sort=name` plus fixed
+      # mtime/owner/group makes the hash a pure function of file
+      # content, not of this run's own filesystem timestamps/ownership
+      # metadata (which would otherwise make every run's "same code"
+      # hash differently). subject-name is the real FunctionName from
+      # template.yaml, not an invented identifier.
+      - name: Compute attestation subject from the built SAM package
+        id: subject
+        run: |
+          DIGEST="$(tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf - -C .aws-sam/build/SignFunction . | sha256sum | cut -d' ' -f1)"
+          echo "subject-name=lucid-attest-service-sign" >> "$GITHUB_OUTPUT"
+          echo "subject-digest=sha256:$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # push:branches:[main] carries no PR context of its own -- looks up
+      # whichever PR GitHub associates with the pushed commit (works for
+      # merge/squash/rebase alike). Empty outputs (no associated PR) is a
+      # legitimate, handled case -- the mint step below falls back to no
+      # PR context exactly as it already does for workflow_dispatch.
+      - name: Resolve PR Context for a Push-Triggered Run
+        id: pr-context
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pulls_json="$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls")"
+          echo "base-sha=$(echo "$pulls_json" | jq -r '.[0].base.sha // empty')" >> "$GITHUB_OUTPUT"
+          echo "number=$(echo "$pulls_json" | jq -r '.[0].number // empty')" >> "$GITHUB_OUTPUT"
+
+      # No --sign/--dry-run-sign here: this job has no id-token permission.
+      # Written unsigned; the separate `attest` job (the only one with
+      # id-token: write) signs it from the artifact uploaded below.
+      #
+      # No GitHub App token: unlike every other repo in this platform,
+      # this repo has no App installed on it yet (no APP_ID/APP_PRIVATE_KEY
+      # configured) -- branch governance runs off the ambient default
+      # github.token instead, which can't see rules-for-branch
+      # (Administration: Read) but is enough for the S2C2F checks that
+      # don't need it (vulnerability-alerts, dependabot/alerts, community-
+      # profile). Branch governance itself degrades to
+      # branch_governance_unverified until an App gets installed here too
+      # -- expected on a first run, not a bug.
+      #
+      # --min-rcs 0: see this file's own header for why -- no observed
+      # baseline yet, raise deliberately once one exists.
+      - name: Mint unsigned Lucid RCS attestation
+        id: mint
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || steps.pr-context.outputs.base-sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-context.outputs.number }}
+          HEAD_SHA: ${{ github.sha }}
+          BRANCH_NAME: ${{ github.event.pull_request.base.ref || github.ref_name }}
+          SUBJECT_NAME: ${{ steps.subject.outputs.subject-name }}
+          SUBJECT_DIGEST: ${{ steps.subject.outputs.subject-digest }}
+        run: |
+          EXTRA_ARGS=()
+          if [ -n "$BASE_SHA" ]; then
+            if [ -z "$PR_NUMBER" ]; then
+              echo "ERROR: BASE_SHA resolved but PR_NUMBER did not; refusing to mint with inconsistent PR context" >&2
+              exit 1
+            fi
+            EXTRA_ARGS=(--base-sha "$BASE_SHA" --pr-number "$PR_NUMBER")
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "ERROR: github.event.pull_request.base.sha was empty on a pull_request event; refusing to guess a base commit" >&2
+            exit 1
+          fi
+
+          cd _assay && uv run --no-sync python -m cli.main \
+            --repo-dir "$GITHUB_WORKSPACE" \
+            --junit-xml "$GITHUB_WORKSPACE/build/junit.xml" \
+            --coverage-report "$GITHUB_WORKSPACE/build/coverage.xml" \
+            --coverage-format cobertura \
+            --subject-name "$SUBJECT_NAME" \
+            --subject-digest "$SUBJECT_DIGEST" \
+            --head-sha "${HEAD_SHA}" \
+            --repository "${{ github.repository }}" \
+            --branch "${BRANCH_NAME}" \
+            --github-token "${{ github.token }}" \
+            --min-rcs 0 \
+            --out "$GITHUB_WORKSPACE/build/lucid-attest-service.unsigned.json" \
+            "${EXTRA_ARGS[@]}"
+
+      - name: Upload unsigned statements
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-statements
+          path: build/lucid-attest-service.unsigned.json
+          if-no-files-found: error
+
+  # The only job with id-token: write. Signs the assay/v1 RCS statement
+  # `build` uploaded via this repo's own already-deployed sign-client.yml
+  # -- see this file's own header for why the `uses:` pin below is the
+  # same already-trusted commit every external caller uses, not this
+  # run's own in-review code.
+  attest:
+    needs: build
+    permissions:
+      id-token: write # Required for Sigstore keyless OIDC minting
+      contents: read
+    uses: lucid-provenance/lucid-attest-service/.github/workflows/sign-client.yml@231039b08b91b78788dba732a10355aafcaeaa11
+    with:
+      artifact-name: unsigned-statements
+      statement-files: |
+        lucid-attest-service.unsigned.json
+      subject-name: ${{ needs.build.outputs.subject-name }}
+      subject-digest: ${{ needs.build.outputs.subject-digest }}
+
+  # Downloads the signed envelope and evaluates lucid-assay's own admission
+  # policy gate against it. No id-token permission -- verifying a
+  # signature doesn't require one, only minting one does.
+  verify:
+    needs: attest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout this repo's own workflow file
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/workflows/assay.yml
+          sparse-checkout-cone-mode: false
+
+      # Scoped to our own well-known `attest:` job shape, not a general
+      # YAML parser -- same discipline as every other repo's own copy of
+      # this step.
+      - name: "Derive expected signer identity from the attest job's own uses: pin"
+        id: signer
+        run: |
+          SIGNER_USES="$(awk '/^  attest:/{f=1} f && /^ *uses:/{print; exit}' \
+            .github/workflows/assay.yml | sed -E 's/^\s*uses:\s*([^ ]+).*/\1/')"
+          if [ -z "$SIGNER_USES" ]; then
+            echo "ERROR: could not parse the attest job's uses: line from .github/workflows/assay.yml -- did the job shape change?" >&2
+            exit 1
+          fi
+          echo "cert-identity=https://github.com/${SIGNER_USES}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pinned lucid-assay CLI
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lucid-provenance/lucid-assay
+          ref: ${{ env.ASSAY_CLI_SHA }}
+          path: _assay
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: "_assay/uv.lock"
+
+      - name: Install lucid-assay dependencies
+        working-directory: _assay
+        run: uv sync --frozen --extra dev
+
+      - name: Cache Sigstore TUF metadata
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/sigstore-python
+          key: sigstore-tuf-${{ runner.os }}-${{ env.ASSAY_CLI_SHA }}
+          restore-keys: |
+            sigstore-tuf-${{ runner.os }}-
+
+      - name: Download signed statements
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: signed-statements
+          path: build
+
+      # --disallow-degraded deliberately OMITTED: this repo has no GitHub
+      # App installed yet (see the mint step's own comment above), so
+      # branch governance is expected to degrade on every run until that
+      # changes -- gating hard on it here would fail every run, forever,
+      # for a structural reason, not a real gap. Revisit once an App is
+      # installed on this repo, same as every other repo's own path to
+      # eventually enabling this flag.
+      - name: Verify Lucid attestation (RCS gate + SLSA Source/Build tracks)
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_REF: ${{ github.ref }}
+          CERT_IDENTITY: ${{ steps.signer.outputs.cert-identity }}
+          CERT_OIDC_ISSUER: https://token.actions.githubusercontent.com
+          EXPECTED_WORKFLOW: ${{ github.workflow }}
+        run: |
+          VERIFY_ARGS=(
+            --min-rcs 0
+            --expected-repository "$EXPECTED_REPOSITORY"
+            --expected-ref "$EXPECTED_REF"
+            --expected-workflow "$EXPECTED_WORKFLOW"
+            --cert-identity "$CERT_IDENTITY"
+            --cert-oidc-issuer "$CERT_OIDC_ISSUER"
+            --slsa-envelope ../build/provenance.dsse.json
+            --write-verdict
+          )
+
+          cd _assay && uv run --no-sync python -m cli.verify ../build/lucid-attest-service.dsse.json "${VERIFY_ARGS[@]}"
+
+      - name: Upload signed attestations
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lucid-attest-service-attestation
+          path: |
+            build/lucid-attest-service.dsse.json
+            build/provenance.dsse.json
+          if-no-files-found: error
