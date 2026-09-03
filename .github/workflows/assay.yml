@@ -67,7 +67,7 @@ permissions:
 # already-working workflows' own pinning discipline, which deserves its
 # own deliberate PR, not a drive-by bundled into new work.
 env:
-  ASSAY_CLI_SHA: 23c719bcf086488dd6aa37ade085791a8c63f75e # lucid-assay main: PR #73 (SBOM attestation, hash anchoring, granular SARIF severity rollups), 2026-09-03
+  ASSAY_CLI_SHA: c064e80d1ea2a8e237f8053b3b7c6f53cde38f8e # lucid-assay main: PR #76 (dependency-materialization decoupled out of SLSA Build L2/L3 -- load-bearing for --require-slsa-build-l3 below), #77 (SECURITY.md), #78 (lucid-attest retired from trust allowlist), #79 (yarn/poetry/Pipfile/Gradle lockfile parity), #80 (Syft SBOM wired into lucid-assay's own dogfood), 2026-09-03 -- confirmed via a real green run of lucid-assay's own dogfood Score & attest workflow at this exact commit
 
 jobs:
   # Runs this repo's own tests (against the same vendored cli.oidc_signer
@@ -452,6 +452,19 @@ jobs:
           CERT_OIDC_ISSUER: https://token.actions.githubusercontent.com
           EXPECTED_WORKFLOW: ${{ github.workflow }}
         run: |
+          # --require-slsa-build-l3: enabled 2026-09-03, platform-wide.
+          # Independent of the --min-rcs 0 / --disallow-degraded-omitted
+          # caveats above -- both about RCS threshold and branch
+          # governance, unrelated to the Build Track. Both Build Level 3
+          # items have been genuinely passing for real on every current
+          # caller across the platform since the lucid-attest-service
+          # cutover -- confirmed against a real CI run on this repo the
+          # same day this flag was flipped, not assumed. Requires
+          # ASSAY_CLI_SHA >= lucid-assay PR #76 (the dependency-
+          # materialization decoupling -- Build Level 3 no longer requires
+          # a third, dependency-related item this repo's own Lambda
+          # package couldn't reliably satisfy, having no lockfile of its
+          # own to hash-pin against).
           VERIFY_ARGS=(
             --min-rcs 0
             --expected-repository "$EXPECTED_REPOSITORY"
@@ -460,6 +473,7 @@ jobs:
             --cert-identity "$CERT_IDENTITY"
             --cert-oidc-issuer "$CERT_OIDC_ISSUER"
             --slsa-envelope ../build/provenance.dsse.json
+            --require-slsa-build-l3
             --write-verdict
           )
 
