@@ -3,9 +3,19 @@
 # tagged releases -- opens a PR here proposing the bump, never merges
 # automatically. Requires a real reviewed merge before any pin actually
 # moves, same discipline as every hand-authored bump in this platform.
+#
+# `groups` bundles every github-actions bump into one PR per week
+# instead of one PR per action -- confirmed necessary 2026-09-02: five
+# repos' first real week under Dependabot opened 19 separate single-
+# action PRs total, real but unmanageably noisy for what's almost always
+# a same-day batch of trivial version bumps.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
