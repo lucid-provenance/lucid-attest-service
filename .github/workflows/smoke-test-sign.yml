@@ -31,7 +31,7 @@ jobs:
       # Needed so the local composite action below (a real file in this
       # checkout, not a published marketplace action) is actually present
       # on the runner's filesystem.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # This workflow *is* the caller lucid-attest-service expects to
       # have already minted its own ambient OIDC identity before calling
