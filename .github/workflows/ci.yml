@@ -19,7 +19,7 @@ env:
   # Mirrors deploy.yml's own pin -- see that file's comment for what this
   # governs and why it's a hardcoded literal, never a workflow input.
   # Bump both together.
-  SIGNER_SOURCE_SHA: "e7f224511ec68b0a342400cb837e1dee27abf133"
+  SIGNER_SOURCE_SHA: "23c719bcf086488dd6aa37ade085791a8c63f75e"
 
 jobs:
   test:

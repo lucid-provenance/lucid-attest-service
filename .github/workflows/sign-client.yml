@@ -69,7 +69,17 @@ env:
   # deploy.yml/ci.yml's own SIGNER_SOURCE_SHA: which lucid-assay commit's
   # provenance-construction code this job runs is a deliberate,
   # reviewable commit to *this* file, not a caller-controlled value.
-  PROVENANCE_SOURCE_SHA: "e7f224511ec68b0a342400cb837e1dee27abf133"
+  #
+  # Bumped 2026-09-03 to lucid-assay PR #73's merge (35 commits stale --
+  # last bumped PR #57, before the sign-client-builder-identity trust fix
+  # *and* the SBOM work). Routine catch-up, not load-bearing: re-verified
+  # empirically (not assumed) that cli.provenance's whole import chain
+  # (cli.provenance -> cli.common/cli.slsa_provenance/cli.parsers.
+  # lockfiles) is still pure stdlib at this commit, so no dependency
+  # install step is newly needed here. Found stale while auditing every
+  # repo's own independent lucid-assay pin for silent drift -- see the
+  # Lucid vault's "Signer SHA pinning pain" note.
+  PROVENANCE_SOURCE_SHA: "23c719bcf086488dd6aa37ade085791a8c63f75e"
 
   # This stack's known, stable HTTP API URL -- see deploy.yml's own
   # SignEndpoint output comment for how to re-resolve it if it ever

@@ -31,7 +31,15 @@ env:
   # input, same discipline as lucid-attest's own SIGNER_SOURCE_SHA: which
   # lucid-assay commit's signing code this service runs is a deliberate,
   # reviewable commit to *this* file, not a caller-controlled value.
-  SIGNER_SOURCE_SHA: "e7f224511ec68b0a342400cb837e1dee27abf133"
+  #
+  # Bumped 2026-09-03 to lucid-assay PR #73's merge. Routine catch-up, not
+  # load-bearing: diffed cli/oidc_signer.py, cli/common.py, and cli/
+  # __init__.py (the three files this workflow actually vendors) between
+  # the old and new pin -- byte-identical, zero functional change to what
+  # ships in the Lambda. Found stale while auditing every repo's own
+  # independent lucid-assay pin for silent drift -- see the Lucid vault's
+  # "Signer SHA pinning pain" note.
+  SIGNER_SOURCE_SHA: "23c719bcf086488dd6aa37ade085791a8c63f75e"
 
 jobs:
   deploy:
