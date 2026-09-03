@@ -4,3 +4,7 @@
 # inside CI's own throwaway environment. Version floor matches
 # lucid-assay's own dev-extras convention.
 pytest>=7.0.0
+# --cov-report=xml (Cobertura-shaped) feeds cli.main's own --coverage-
+# report in .github/workflows/assay.yml -- ci.yml itself doesn't need
+# coverage output at all, only the dogfood mint step does.
+pytest-cov>=4.0.0
