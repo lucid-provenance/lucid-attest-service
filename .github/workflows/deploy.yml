@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout lucid-attest-service (this repo)
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Read-only checkout of the one lucid-assay commit this deploy
       # trusts -- see env.SIGNER_SOURCE_SHA's own comment above for why
@@ -46,7 +46,7 @@ jobs:
       # executed by this workflow itself; only the three files copied
       # below ever ship in the Lambda's own deployment package.
       - name: Checkout pinned lucid-assay signer source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: lucid-provenance/lucid-assay
           ref: ${{ env.SIGNER_SOURCE_SHA }}
@@ -70,12 +70,12 @@ jobs:
           cp _signer/cli/common.py      src/cli/common.py
           cp _signer/cli/oidc_signer.py src/cli/oidc_signer.py
 
-      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: arn:aws:iam::133307902115:role/lucid-attest-service-deploy
           aws-region: us-east-1
 
-      - uses: aws-actions/setup-sam@f84ec7d548307efafe33230528756de3c5841a17 # v2
+      - uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
 
       # --use-container: builds inside SAM's own public.ecr.aws/sam/
       # build-python3.13 image, matching Lambda's actual Amazon Linux 2023
