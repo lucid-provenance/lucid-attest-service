@@ -67,7 +67,7 @@ permissions:
 # already-working workflows' own pinning discipline, which deserves its
 # own deliberate PR, not a drive-by bundled into new work.
 env:
-  ASSAY_CLI_SHA: c064e80d1ea2a8e237f8053b3b7c6f53cde38f8e # lucid-assay main: PR #76 (dependency-materialization decoupled out of SLSA Build L2/L3 -- load-bearing for --require-slsa-build-l3 below), #77 (SECURITY.md), #78 (lucid-attest retired from trust allowlist), #79 (yarn/poetry/Pipfile/Gradle lockfile parity), #80 (Syft SBOM wired into lucid-assay's own dogfood), 2026-09-03 -- confirmed via a real green run of lucid-assay's own dogfood Score & attest workflow at this exact commit
+  ASSAY_CLI_SHA: ce7da26fc9d549f15b784d08549da9be298b9fe3 # lucid-assay main: PR #81 (--require-slsa-build-l3 enabled as a hard gate in lucid-assay's own dogfood workflow), #82 (Repository & Workstation Governance: predicate.repository_governance, --require-commit-signing opt-in gate), 2026-09-04 -- confirmed via a real green run of lucid-assay's own dogfood Score & attest workflow at this exact commit
 
 jobs:
   # Runs this repo's own tests (against the same vendored cli.oidc_signer
