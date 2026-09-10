@@ -111,9 +111,21 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "_assay/uv.lock"
 
+      # --no-build: refuses to build any dependency from a source
+      # distribution (which would otherwise invoke that package's own
+      # build backend -- arbitrary code execution if a compromised sdist
+      # ever entered the lockfile), forcing wheel-only installs.
+      # --no-install-project: skips building lucid-assay itself (which
+      # --no-build alone would otherwise refuse, for lack of a prebuilt
+      # wheel of its own). Safe because every invocation below is `cd
+      # _assay && uv run --no-sync python -m cli.main/cli.verify`, never a
+      # `lucid-assay` entry-point command -- cli/ resolves via cwd on
+      # sys.path regardless of whether the project was ever "installed",
+      # same verified-safe pattern lucid-console's identical copy of this
+      # file already uses.
       - name: Install lucid-assay dependencies
         working-directory: _assay
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --no-build --no-install-project
 
       # lucid-assay's own dependency-lockfile detector AND its AST
       # test-suite walker both walk --repo-dir recursively at any depth,
@@ -373,7 +385,13 @@ jobs:
   # policy gate against it. No id-token permission -- verifying a
   # signature doesn't require one, only minting one does.
   verify:
-    needs: attest
+    # `build` added alongside the pre-existing `attest` dependency solely
+    # so "Publish Signed Bundle to lucid-dsse-collector" below can read
+    # needs.build.outputs.subject-digest -- doesn't change the DAG's
+    # actual critical path, since `attest` already depends on `build`.
+    # Same addition lucid-assay's own assay.yml made for the identical
+    # reason.
+    needs: [build, attest]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -419,9 +437,21 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "_assay/uv.lock"
 
+      # --no-build: refuses to build any dependency from a source
+      # distribution (which would otherwise invoke that package's own
+      # build backend -- arbitrary code execution if a compromised sdist
+      # ever entered the lockfile), forcing wheel-only installs.
+      # --no-install-project: skips building lucid-assay itself (which
+      # --no-build alone would otherwise refuse, for lack of a prebuilt
+      # wheel of its own). Safe because every invocation below is `cd
+      # _assay && uv run --no-sync python -m cli.main/cli.verify`, never a
+      # `lucid-assay` entry-point command -- cli/ resolves via cwd on
+      # sys.path regardless of whether the project was ever "installed",
+      # same verified-safe pattern lucid-console's identical copy of this
+      # file already uses.
       - name: Install lucid-assay dependencies
         working-directory: _assay
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --no-build --no-install-project
 
       - name: Cache Sigstore TUF metadata
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -488,3 +518,42 @@ jobs:
             build/provenance.dsse.json
             build/sbom.dsse.json
           if-no-files-found: error
+
+      # Publishes this run's signed bundle to lucid-dsse-collector, the
+      # ingestion gateway backing the Lucid console/PR bot. Identical
+      # step to lucid-assay's own copy (see that repo's assay.yml for the
+      # fuller rationale on every choice below) -- dormant until
+      # LUCID_DSSE_COLLECTOR_URL is set as a repo/org variable,
+      # continue-on-error since ingestion is fire-and-forget from this
+      # pipeline's perspective, no auth header needed (caller identity
+      # comes from each envelope's own embedded Sigstore signature).
+      # needs.build.outputs.subject-digest, not .image-digest -- this
+      # repo's own subject isn't a container image (see this workflow's
+      # own top-of-file comment on --subject-name/--subject-digest), but
+      # the collector's metadata.image_digest field is still the right
+      # place for whatever digest identifies this run's subject.
+      - name: Publish Signed Bundle to lucid-dsse-collector
+        if: vars.LUCID_DSSE_COLLECTOR_URL != ''
+        continue-on-error: true
+        env:
+          COLLECTOR_URL: ${{ vars.LUCID_DSSE_COLLECTOR_URL }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.subject-digest }}
+        run: |
+          METADATA=$(jq -n \
+            --arg repo "$REPOSITORY" \
+            --arg sha "$COMMIT_SHA" \
+            --arg ref "$REF" \
+            --arg digest "${IMAGE_DIGEST#sha256:}" \
+            '{repository: $repo, commit_sha: $sha, ref: $ref, image_digest: $digest}')
+
+          FORM_ARGS=(-F "metadata=${METADATA};type=application/json")
+          for envelope in build/lucid-attest-service.dsse.json build/provenance.dsse.json build/sbom.dsse.json build/sarif-reports.dsse.json; do
+            if [ -f "$envelope" ]; then
+              FORM_ARGS+=(-F "envelopes=@${envelope};type=application/json")
+            fi
+          done
+
+          curl -sSf -X POST "${COLLECTOR_URL%/}/api/v1/attestations" "${FORM_ARGS[@]}"
