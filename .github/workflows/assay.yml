@@ -111,9 +111,21 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "_assay/uv.lock"
 
+      # --no-build: refuses to build any dependency from a source
+      # distribution (which would otherwise invoke that package's own
+      # build backend -- arbitrary code execution if a compromised sdist
+      # ever entered the lockfile), forcing wheel-only installs.
+      # --no-install-project: skips building lucid-assay itself (which
+      # --no-build alone would otherwise refuse, for lack of a prebuilt
+      # wheel of its own). Safe because every invocation below is `cd
+      # _assay && uv run --no-sync python -m cli.main/cli.verify`, never a
+      # `lucid-assay` entry-point command -- cli/ resolves via cwd on
+      # sys.path regardless of whether the project was ever "installed",
+      # same verified-safe pattern lucid-console's identical copy of this
+      # file already uses.
       - name: Install lucid-assay dependencies
         working-directory: _assay
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --no-build --no-install-project
 
       # lucid-assay's own dependency-lockfile detector AND its AST
       # test-suite walker both walk --repo-dir recursively at any depth,
@@ -425,9 +437,21 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "_assay/uv.lock"
 
+      # --no-build: refuses to build any dependency from a source
+      # distribution (which would otherwise invoke that package's own
+      # build backend -- arbitrary code execution if a compromised sdist
+      # ever entered the lockfile), forcing wheel-only installs.
+      # --no-install-project: skips building lucid-assay itself (which
+      # --no-build alone would otherwise refuse, for lack of a prebuilt
+      # wheel of its own). Safe because every invocation below is `cd
+      # _assay && uv run --no-sync python -m cli.main/cli.verify`, never a
+      # `lucid-assay` entry-point command -- cli/ resolves via cwd on
+      # sys.path regardless of whether the project was ever "installed",
+      # same verified-safe pattern lucid-console's identical copy of this
+      # file already uses.
       - name: Install lucid-assay dependencies
         working-directory: _assay
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --no-build --no-install-project
 
       - name: Cache Sigstore TUF metadata
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
