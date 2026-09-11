@@ -12,6 +12,15 @@ on:
   push:
     branches: [main]
 
+# Cancels a now-stale run for the same PR/branch when a newer commit
+# supersedes it (several quick pushes to one PR no longer leave older
+# runs going alongside the current one, burning CI minutes). Keyed by
+# github.event_name as well as the PR/ref, same as this org's other
+# repos' own assay.yml concurrency group, for consistency.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
