@@ -45,6 +45,21 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch: {}
 
+# Cancels a now-stale run for the same PR/branch when a newer commit
+# supersedes it (several quick pushes to one PR no longer leave older
+# runs going alongside the current one, burning CI minutes). Keyed by
+# github.event_name as well as the PR/ref: push here only ever targets
+# `main` and pull_request only ever targets an open PR's own branch, so
+# the two can't collide on one commit the way lucid-assay's own
+# feat/**-branch push trigger can -- this is a consistency/safety-net
+# choice, not a fix for an overlap that exists in this repo today.
+# github.event.pull_request.number (not github.ref, the synthetic
+# "<number>/merge" ref on a pull_request event) groups a PR's own
+# synchronize-triggered runs together across pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 # No id-token: write at the workflow level -- granted only to `attest`.
 # `build` runs this repo's own tests and builds its real SAM package; it
 # must never be able to reach the Sigstore signing credential itself, and
