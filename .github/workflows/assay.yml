@@ -332,13 +332,33 @@ jobs:
       - name: Compute attestation subject from the built SAM package
         id: subject
         run: |
-          FILELIST="$(mktemp)"
+          mkdir -p build
+          FILELIST="build/sam-filelist.txt"
           (cd .aws-sam/build/SignFunction && find . -type f | LC_ALL=C sort) > "$FILELIST"
           DIGEST="$(tar --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --mode=644 \
             --no-recursion -cf - -C .aws-sam/build/SignFunction --files-from="$FILELIST" \
             | sha256sum | cut -d' ' -f1)"
           echo "subject-name=lucid-attest-service-sign" >> "$GITHUB_OUTPUT"
           echo "subject-digest=sha256:$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Build-side file count: $(wc -l < "$FILELIST")"
+          echo "Build-side total size (bytes): $(du -sb .aws-sam/build/SignFunction | cut -f1)"
+
+      # Diagnostic-only, not the trust boundary itself (that's the digest
+      # comparison below) -- added 2026-09-14 after two consecutive real
+      # CI failures at deploy's digest-verification step survived two
+      # independent, well-reasoned fix attempts (a stale-action-version
+      # theory, then a permissions/empty-dir-immune digest recipe),
+      # meaning the actual mechanism was still unknown. Uploading the
+      # exact sorted file list `build` saw lets `deploy` diff its own
+      # post-download file list against this one directly, turning "the
+      # digest differs" into "here are the exact files that differ,"
+      # rather than a fourth guess.
+      - name: Upload build-side file list (diagnostic)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sam-build-filelist
+          path: build/sam-filelist.txt
+          if-no-files-found: error
 
       # Fixed 2026-09-14, a real gap this consolidation pass itself
       # introduced without catching it: `deploy` used to run its OWN
@@ -753,6 +773,17 @@ jobs:
           name: sam-build-output
           path: .aws-sam/build/
 
+      # Diagnostic-only companion to the digest check below -- see
+      # build's own "Upload build-side file list" step for why this
+      # exists (two prior fix attempts, both wrong, with no visibility
+      # into whether the file *set* or the file *content* was actually
+      # diverging).
+      - name: Download build-side file list (diagnostic)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sam-build-filelist
+          path: build-side
+
       # Independently re-derives the digest from the artifact this job
       # actually downloaded -- same tar recipe `build`'s own "Compute
       # attestation subject" step used -- and asserts it equals what got
@@ -765,6 +796,13 @@ jobs:
       # either GitHub Actions' own artifact transport was tampered with
       # or corrupted, or `build` computed its digest from something other
       # than what it uploaded -- either way, this must never deploy.
+      #
+      # On a mismatch, diffs this job's own post-download file list
+      # against the exact one `build` saw before upload -- distinguishes
+      # "the file *set* changed in transport" (the diff is non-empty)
+      # from "the set is identical but content/bytes differ" (the diff
+      # is empty despite the digest mismatch), rather than a fourth
+      # guess with no more information than the last two had.
       - name: Verify downloaded artifact matches the attested digest
         env:
           EXPECTED_DIGEST: ${{ needs.build.outputs.subject-digest }}
@@ -778,8 +816,10 @@ jobs:
             echo "ERROR: downloaded SAM build output does not match the attested subject-digest." >&2
             echo "  expected: $EXPECTED_DIGEST" >&2
             echo "  actual:   $ACTUAL_DIGEST" >&2
-            echo "  downloaded file count: $(wc -l < "$FILELIST")" >&2
+            echo "  downloaded file count: $(wc -l < "$FILELIST") (build-side: $(wc -l < build-side/sam-filelist.txt))" >&2
             echo "  downloaded total size (bytes): $(du -sb .aws-sam/build/SignFunction | cut -f1)" >&2
+            echo "  file-list diff (< build-side, > this download):" >&2
+            diff build-side/sam-filelist.txt "$FILELIST" >&2 || true
             exit 1
           fi
           echo "Verified: downloaded build output matches attested digest ($ACTUAL_DIGEST)"
