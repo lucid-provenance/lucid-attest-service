@@ -300,17 +300,43 @@ jobs:
       # The attestation subject: a deterministic SHA-256 of the actual
       # built Lambda function package's contents -- the closest honest
       # equivalent to another repo's own container image digest, for an
-      # artifact that isn't a container. `tar --sort=name` plus fixed
-      # mtime/owner/group makes the hash a pure function of file
-      # content, not of this run's own filesystem timestamps/ownership
-      # metadata (which would otherwise make every run's "same code"
-      # hash differently). subject-name is the real FunctionName from
-      # template.yaml, not an invented identifier.
+      # artifact that isn't a container. subject-name is the real
+      # FunctionName from template.yaml, not an invented identifier.
+      #
+      # Fixed 2026-09-14: the deploy job's own independent recomputation
+      # of this same digest (after downloading the artifact this step's
+      # sibling job uploads -- see "Verify downloaded artifact matches
+      # the attested digest" below) failed twice in real CI, identically,
+      # regardless of the actions/upload-artifact|download-artifact
+      # version in use -- ruling out a version-specific quirk and
+      # pointing at something structural in how a zip-based artifact
+      # round-trip preserves a real directory tree. The original tar
+      # recipe (`--sort=name --mtime=... --owner=0 --group=0
+      # --numeric-owner`, no `--mode`, walking the directory tree
+      # directly) was vulnerable to two real, well-documented failure
+      # modes -- confirmed by direct local reproduction, not assumed:
+      # (1) GitHub's artifact storage silently drops empty directories,
+      # which `tar --sort=name .` would otherwise include as an entry;
+      # (2) Unix permission bits (e.g. an executable bit) are not
+      # guaranteed to round-trip exactly through a zip-based artifact.
+      # Either one alone reproducibly changes this digest for identical
+      # file *content*. Fix: hash only regular files (`find -type f`,
+      # `--no-recursion --files-from=`, so no directory entries -- empty
+      # or not -- ever enter the archive), each forced to a fixed
+      # absolute mode (`--mode=644`, meaningless for what actually runs
+      # in Lambda -- a Python package's behavior never depends on a
+      # file's Unix permission bits). Makes this digest a pure function
+      # of (sorted relative file paths, file content) and nothing else --
+      # not sensitive to anything an artifact transport could plausibly
+      # gain or lose. Both jobs must keep this exact recipe identical.
       - name: Compute attestation subject from the built SAM package
         id: subject
         run: |
-          DIGEST="$(tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            -cf - -C .aws-sam/build/SignFunction . | sha256sum | cut -d' ' -f1)"
+          FILELIST="$(mktemp)"
+          (cd .aws-sam/build/SignFunction && find . -type f | LC_ALL=C sort) > "$FILELIST"
+          DIGEST="$(tar --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --mode=644 \
+            --no-recursion -cf - -C .aws-sam/build/SignFunction --files-from="$FILELIST" \
+            | sha256sum | cut -d' ' -f1)"
           echo "subject-name=lucid-attest-service-sign" >> "$GITHUB_OUTPUT"
           echo "subject-digest=sha256:$DIGEST" >> "$GITHUB_OUTPUT"
 
@@ -743,12 +769,17 @@ jobs:
         env:
           EXPECTED_DIGEST: ${{ needs.build.outputs.subject-digest }}
         run: |
-          ACTUAL_DIGEST="sha256:$(tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            -cf - -C .aws-sam/build/SignFunction . | sha256sum | cut -d' ' -f1)"
+          FILELIST="$(mktemp)"
+          (cd .aws-sam/build/SignFunction && find . -type f | LC_ALL=C sort) > "$FILELIST"
+          ACTUAL_DIGEST="sha256:$(tar --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --mode=644 \
+            --no-recursion -cf - -C .aws-sam/build/SignFunction --files-from="$FILELIST" \
+            | sha256sum | cut -d' ' -f1)"
           if [ "$ACTUAL_DIGEST" != "$EXPECTED_DIGEST" ]; then
             echo "ERROR: downloaded SAM build output does not match the attested subject-digest." >&2
             echo "  expected: $EXPECTED_DIGEST" >&2
             echo "  actual:   $ACTUAL_DIGEST" >&2
+            echo "  downloaded file count: $(wc -l < "$FILELIST")" >&2
+            echo "  downloaded total size (bytes): $(du -sb .aws-sam/build/SignFunction | cut -f1)" >&2
             exit 1
           fi
           echo "Verified: downloaded build output matches attested digest ($ACTUAL_DIGEST)"
