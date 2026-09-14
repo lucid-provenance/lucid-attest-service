@@ -5,8 +5,9 @@ Description: >
 
   Phase 2: real signing. src/app.py calls lucid-assay's
   cli.oidc_signer.sign_statement, vendored at deploy time from a pinned
-  source SHA (see deploy.yml's SIGNER_SOURCE_SHA and its "Vendor pinned
-  cli.oidc_signer" step) -- the same build-time-checkout discipline
+  source SHA (see assay.yml's `deploy` job's own SIGNER_SOURCE_SHA and its
+  "Vendor pinned cli.oidc_signer" step -- folded in from a wholly separate
+  deploy.yml on 2026-09-14) -- the same build-time-checkout discipline
   lucid-attest's own Milestone #18 build-signer-image.yml uses, though
   narrower here (see README's Status section for exactly why).
 
@@ -34,6 +35,37 @@ Globals:
     Environment:
       Variables:
         HOME: /tmp
+  # Added 2026-09-14, closing a real independent-review finding: with no
+  # Auth block at all, HttpApi forwarded EVERY request straight to
+  # SignFunction -- including an anonymous request with no Authorization
+  # header, or a malformed one -- meaning app.py's own header checks only
+  # ever ran *after* a full Lambda cold-start/invocation had already been
+  # paid for. That's a real billing/compute-exhaustion surface (unbounded
+  # anonymous traffic, each one a full Lambda invocation), not a content-
+  # integrity one -- this authorizer intentionally does NOT and cannot
+  # establish which *repo/workflow* is calling (every legitimate caller
+  # mints its own token under its own GitHub Actions identity; that's the
+  # whole point of this being a shared signing endpoint) -- it only
+  # rejects a request that isn't even a well-formed, correctly-issued,
+  # correct-audience GitHub Actions OIDC token, at the API Gateway edge,
+  # before SignFunction is ever invoked. `audience: sigstore` matches
+  # exactly what sign-client.yml's own "Mint ambient OIDC identity token"
+  # step requests (see that workflow's own comment) -- not a guess.
+  # app.py's own Authorization-header parsing is UNCHANGED and still
+  # runs -- this is a defense-in-depth edge check, not a replacement for
+  # it (a request could pass this authorizer's issuer/audience check yet
+  # still be missing/malformed in the exact shape _extract_identity_token
+  # expects, e.g. a non-Bearer scheme).
+  HttpApi:
+    Auth:
+      Authorizers:
+        GitHubActionsOidcAuthorizer:
+          JwtConfiguration:
+            issuer: "https://token.actions.githubusercontent.com"
+            audience:
+              - "sigstore"
+          IdentitySource: "$request.header.Authorization"
+      DefaultAuthorizer: GitHubActionsOidcAuthorizer
 
 Resources:
   SignFunction:

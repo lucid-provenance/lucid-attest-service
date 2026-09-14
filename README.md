@@ -225,3 +225,67 @@ this repo). The fuller vulnerability-management and secure-SDLC policy
 governing how findings get triaged, fixed, or formally risk-accepted
 lives in [`lucid-provenance/compliance`](https://github.com/lucid-provenance/compliance)
 (private).
+
+### Independent architectural review, 2026-09-14
+
+An independent review (Gemini) raised four findings. Each was checked
+against the real code/config before being accepted or rejected — see
+lucid-assay's own CLAUDE.md "Independent code review" precedent for why
+that verification step matters and isn't skipped.
+
+- **API Gateway had no authorizer — confirmed and fixed.** `template.yaml`
+  had no `Auth:` block at all: every request, including anonymous/junk
+  ones, reached `SignFunction` and paid for a full Lambda invocation
+  before `app.py`'s own header checks ever ran — a real billing/compute-
+  exhaustion surface. Fixed via a native HTTP API JWT authorizer
+  (`Globals.HttpApi.Auth`) scoped to GitHub Actions' own OIDC issuer and
+  the exact `audience: sigstore` every real caller (`sign-client.yml`,
+  `smoke-test-sign.yml`) already mints its token for — rejects a request
+  that isn't even a well-formed, correctly-issued token at the API
+  Gateway edge, before Lambda runs. **Deliberately does not and cannot**
+  restrict *which* repo/workflow may call this endpoint — every
+  legitimate caller mints its own token under its own identity, which is
+  the whole point of a shared signing endpoint; that's a distinct
+  problem (see the next item) a token-shaped-and-audience check can't
+  solve. Not yet exercised against a real deploy + a real smoke-test run
+  as of this writing — the next `smoke-test-sign.yml` run after this
+  merges is the actual confirmation, not this description.
+- **The signer blindly signs whatever statement it's handed — confirmed,
+  not new, not fixed here.** Verified directly against
+  `cli.oidc_signer.sign_statement`: it performs zero re-validation of a
+  statement's *content* (RCS score, subject digest, test results, ...)
+  before signing it — a compromised caller can request a signature over
+  fabricated claims and get a validly-signed DSSE envelope back. Real,
+  but this is the same, already-tracked platform-wide gap as lucid-assay
+  itself shipping a fabricated subject digest in its own dogfood run
+  (Bill's own priority-1 item going into this session) — the isolated
+  signer was only ever designed to bind a trusted *identity* to the
+  signature (which it does: see `TRUSTED_CONTROL_PLANE_BUILDER_IDS` and
+  SLSA Build L3's control-plane-builder-identity/isolated-provenance-
+  generation checks), never to independently re-derive or verify the
+  claims it's asked to sign — that would require the signer to re-run
+  scoring/verification logic server-side, a materially larger design
+  change than anything else in this pass, and isn't attempted here.
+- **Missing OIDC token validation — checked, rejected.** The claim that
+  "no length limit or structural validation" occurs before a token
+  reaches the signing context doesn't hold up against the actual
+  installed library: `sigstore.oidc.IdentityToken.__init__` already
+  calls `jwt.decode()` with `required=["aud","sub","iat","exp","iss"]`
+  and raises a clean `IdentityError` on anything malformed, oversized,
+  or garbage — caught by `oidc_signer.py`'s existing exception handling
+  and turned into a normal 502, not a crash or unbounded resource
+  consumption. No injection vector exists either (a JWT decode, not
+  eval/exec). Not fixed, because there was nothing to fix as described.
+- **SHA-pinned vendoring requires a manual bump — confirmed, not a new
+  problem, "durable fix" not applied.** `SIGNER_SOURCE_SHA`/
+  `ASSAY_CLI_SHA` are env-var pins, not `uses:` refs, so Dependabot's
+  `github-actions` ecosystem can't auto-bump either one — true, and
+  already this repo's real, lived experience (both pins have needed
+  manual re-pinning multiple times). The suggested fix (a real package
+  dependency pulled from a registry or a git URL) doesn't obviously
+  solve the automation gap either — Dependabot doesn't reliably auto-bump
+  a git-commit-pinned Python dependency any better than an env-var SHA —
+  and would pull a larger, harder-to-audit surface directly into a
+  Lambda that holds real signing privilege, the opposite of this
+  service's own narrow-vendoring rationale (see Status above). Left as
+  the same known, deliberate tradeoff it already was.
