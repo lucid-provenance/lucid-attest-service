@@ -65,12 +65,10 @@ env:
   # stdlib -- verified empirically, not assumed -- so no dependency
   # install step is needed for it, just this checkout.
   #
-  # A hardcoded literal, never a workflow_call input, same discipline as
-  # assay.yml's `deploy` job (folded in from a wholly separate
-  # deploy.yml on 2026-09-14) / ci.yml's own SIGNER_SOURCE_SHA: which
-  # lucid-assay commit's
-  # provenance-construction code this job runs is a deliberate,
-  # reviewable commit to *this* file, not a caller-controlled value.
+  # A hardcoded literal, never a workflow_call input: which lucid-
+  # assay commit's provenance-construction code this job runs is a
+  # deliberate, reviewable commit to *this* file, not a caller-
+  # controlled value.
   #
   # Bumped 2026-09-03 to lucid-assay PR #73's merge (35 commits stale --
   # last bumped PR #57, before the sign-client-builder-identity trust fix
@@ -184,7 +182,7 @@ jobs:
       # than reproducing PROVENANCE_SOURCE_SHA's self-pin pattern here.
       - name: Mint ambient OIDC identity token (audience sigstore)
         id: oidc
-        uses: lucid-provenance/lucid-attest-service/.github/actions/mint-sigstore-oidc-token@69f843991419df4d9180a981e3bcbd96a927f7a2
+        uses: lucid-provenance/lucid-attest-service/.github/actions/mint-sigstore-oidc-token@9c183ac22d1dad5d0c78bf8b0a7a7cff6e06b811
 
       # Builds one JSON array from every file the caller named (plus the
       # just-constructed provenance statement, if any -- appended here,

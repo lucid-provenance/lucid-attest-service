@@ -80,25 +80,39 @@ permissions:
   contents: read
 
 # ASSAY_CLI_SHA: which lucid-assay commit this repo's own dogfood run
-# vendors cli.oidc_signer from (for the test suite, mirroring ci.yml's
-# own step) and runs cli.main/cli.verify from. Independently pinned here
-# from ci.yml's own SIGNER_SOURCE_SHA and sign-client.yml's own
-# PROVENANCE_SOURCE_SHA -- yes, a third same-repo copy of a value that's
-# currently identical to both of theirs. Known, not an oversight: see the
+# vendors cli.oidc_signer from and runs cli.main/cli.verify from.
+# Independently pinned here from sign-client.yml's own
+# PROVENANCE_SOURCE_SHA -- yes, a second same-repo copy of a value that's
+# currently identical to that one. Known, not an oversight: see the
 # Lucid vault's "Signer SHA pinning pain" note for why a shared
-# Repository Actions Variable would collapse this (and those two) into
+# Repository Actions Variable would collapse this (and that one) into
 # one source of truth with no real downside, and why that wasn't done as
-# a silent side effect of adding this file -- it changes two other
-# already-working workflows' own pinning discipline, which deserves its
-# own deliberate PR, not a drive-by bundled into new work.
+# a silent side effect of adding this file -- it changes another
+# already-working workflow's own pinning discipline, which deserves its
+# own deliberate PR, not a drive-by bundled into new work. (A third copy,
+# ci.yml's own SIGNER_SOURCE_SHA, existed until 2026-09-14, when ci.yml
+# itself was folded into this file -- see "Runs this repo's own tests"
+# below -- removing that copy entirely rather than requiring it be kept
+# in sync.)
 env:
   ASSAY_CLI_SHA: f1b9bc30dd851398c80830380c31a27bee5d2c25 # lucid-assay main: PR #100 (fix(mutation-testing): combine stdout+stderr instead of preferring stderr), 2026-09-14. Jumps this pin forward ~20 PRs (was PR #81/#82, 2026-09-04) specifically to bring in mutation testing (introduced PR #96, absent entirely at the old pin) -- this repo needed a real pyproject.toml/uv.lock/[tool.mutmut] first (added the same day, see build's own "Install this repo's own runtime + test dependencies" step) since _run_mutmut()'s `uv run --with mutmut==<pinned> --no-sync` requires an already-synced project venv to reuse, which this repo never had. Every CLI flag this workflow already depends on (--min-rcs, --expected-repository/--ref/--workflow, --cert-identity/--cert-oidc-issuer, --slsa-envelope, --require-slsa-build-l3, --write-verdict, --subject-name/--subject-digest, --coverage-report, --junit-xml, --sbom, --head-sha, --repository, --branch, --github-token, --repo-dir) confirmed still present at the new pin before bumping, not assumed. Real first measurement, confirmed by an actual local mutmut run against this exact pyproject.toml/uv.lock before this pin ever shipped: 105/142 mutants killed (73.9%, the "degraded" tier, ×0.85 multiplier). Closed same day, not left as a gap: added exact-message/exact-shape assertions to tests/test_app.py (status-code-only assertions were letting mangled/nulled error messages, missing response headers, and a mis-serialized signing payload all survive) -- re-measured at 136/142 (95.8%, "passed" tier, ×1.0 multiplier). The residual 6 survivors are genuine equivalent mutants, confirmed empirically and documented in src/app.py's own module docstring (not chased -- there is no input for which they behave differently).
 
 jobs:
-  # Runs this repo's own tests (against the same vendored cli.oidc_signer
-  # ci.yml already tests), builds the real SAM package this repo deploys,
+  # Runs this repo's own tests against the vendored cli.oidc_signer,
+  # lints template.yaml, builds the real SAM package this repo deploys,
   # and mints an *unsigned* RCS attestation over it. No id-token
-  # permission here at all, and no AWS credentials either.
+  # permission here at all, and no AWS credentials either -- safe to run
+  # on a fork PR with no secrets.
+  #
+  # Folded in from a wholly separate ci.yml (2026-09-14, same day as the
+  # deploy.yml consolidation): that file's own `test`/`lint` jobs ran
+  # `pytest`/`sam validate --lint` a second time, entirely redundant with
+  # this job's own "Run tests with coverage"/"Lint SAM template" steps
+  # below -- two workflows on every single push/PR doing overlapping
+  # work is exactly the "one continuous pipeline" model this whole
+  # consolidation exists to establish, not a harmless coincidence just
+  # because the second one couldn't deploy anything. See this repo's own
+  # git history for ci.yml's last content if you need to compare.
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -131,7 +145,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -176,12 +190,10 @@ jobs:
       - name: Remove lucid-assay's own lockfile and tests from the scan
         run: rm -f _assay/uv.lock && rm -rf _assay/tests
 
-      # Same file list, same rationale as ci.yml's own "Vendor pinned
-      # cli.oidc_signer into src/cli/" step -- reused here rather than a
-      # second, separately-pinned checkout, since this workflow already
-      # has _assay/ checked out at the same commit for cli.main/
-      # cli.verify above. Needed so the test suite below runs against
-      # real code, the same way ci.yml's own run does.
+      # Reuses _assay/ (already checked out at ASSAY_CLI_SHA for
+      # cli.main/cli.verify above) rather than a second, separately-
+      # pinned checkout -- needed so the test suite below runs against
+      # real code.
       - name: Vendor pinned cli.oidc_signer into src/cli/
         run: |
           mkdir -p src/cli
@@ -212,9 +224,8 @@ jobs:
         run: uv sync --frozen --extra dev --no-build --no-install-project
 
       # --junitxml/--cov feed lucid-assay's own --junit-xml/--coverage-
-      # report below -- ci.yml's own `python3 -m pytest -v tests/` never
-      # needed either, since it doesn't mint an attestation. pytest-cov's
-      # XML report is Cobertura-shaped (the --coverage-format default),
+      # report below. pytest-cov's XML report is Cobertura-shaped (the
+      # --coverage-format default),
       # not a separate flag to add. `uv run --no-sync` (not a bare
       # `python3 -m pytest`), so this genuinely runs inside the venv
       # `uv sync` above just created, not the runner's own system Python.
@@ -320,7 +331,7 @@ jobs:
       # `sam build` at all. Same upload-artifact pin already used below
       # for unsigned-statements, for consistency.
       - name: Upload SAM build output (deploy job consumes this, never rebuilds)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sam-build-output
           path: .aws-sam/build/
@@ -424,7 +435,7 @@ jobs:
           }
 
       - name: Upload unsigned statements
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-statements
           path: |
@@ -502,7 +513,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
           cache-dependency-glob: "_assay/uv.lock"
@@ -532,7 +543,7 @@ jobs:
             sigstore-tuf-${{ runner.os }}-
 
       - name: Download signed statements
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: signed-statements
           path: build
@@ -580,7 +591,7 @@ jobs:
           cd _assay && uv run --no-sync python -m cli.verify ../build/lucid-attest-service.dsse.json "${VERIFY_ARGS[@]}"
 
       - name: Upload signed attestations
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lucid-attest-service-attestation
           path: |
@@ -663,8 +674,8 @@ jobs:
   # This isn't the "collapse SIGNER_SOURCE_SHA into ASSAY_CLI_SHA as a
   # drive-by" move that comment was cautioning against -- the variable is
   # gone because this job no longer builds anything that would need it,
-  # not because the two pins were unified as a style choice. ci.yml's and
-  # sign-client.yml's own separate pins are untouched.
+  # not because the two pins were unified as a style choice.
+  # sign-client.yml's own separate pin is untouched.
   #
   # `needs: [build, verify]` (build added alongside the pre-existing
   # verify dependency) solely so "Verify downloaded artifact" below can
@@ -711,7 +722,7 @@ jobs:
       # reference CI/CD pipelines document, not an unusual pattern
       # invented here.
       - name: Download SAM build output (never rebuilds)
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sam-build-output
           path: .aws-sam/build/

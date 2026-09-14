@@ -306,9 +306,11 @@ that verification step matters and isn't skipped.
   already this repo's real, lived experience (both pins have needed
   manual re-pinning multiple times). (`SIGNER_SOURCE_SHA` specifically no
   longer exists in *this* workflow as of the same day's later fix above —
-  `deploy` no longer vendors anything itself — but `ci.yml` and
-  `sign-client.yml` each still carry their own separate, same-shaped pin,
-  so this bullet's substance is unchanged.) The suggested fix (a real package
+  `deploy` no longer vendors anything itself — and `ci.yml` itself was
+  folded into `assay.yml` and deleted the same day, taking its own copy
+  of the same pin with it. `sign-client.yml` still carries its own
+  separate, same-shaped pin, so this bullet's substance is unchanged.)
+  The suggested fix (a real package
   dependency pulled from a registry or a git URL) doesn't obviously
   solve the automation gap either — Dependabot doesn't reliably auto-bump
   a git-commit-pinned Python dependency any better than an env-var SHA —
