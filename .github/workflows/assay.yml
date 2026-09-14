@@ -303,6 +303,29 @@ jobs:
           echo "subject-name=lucid-attest-service-sign" >> "$GITHUB_OUTPUT"
           echo "subject-digest=sha256:$DIGEST" >> "$GITHUB_OUTPUT"
 
+      # Fixed 2026-09-14, a real gap this consolidation pass itself
+      # introduced without catching it: `deploy` used to run its OWN
+      # independent `sam build --use-container` from a fresh checkout,
+      # vendoring cli.oidc_signer from a SEPARATE pin (SIGNER_SOURCE_SHA,
+      # not ASSAY_CLI_SHA) -- meaning the attested subject-digest above
+      # could never provably describe what actually got deployed, the
+      # same "build artifact vs. deploy artifact integrity gap" already
+      # closed for lucid-dsse-collector (its own `build` job pushes an
+      # image by digest; `deploy` re-resolves and deploys that exact
+      # digest, never rebuilding). This is the equivalent for a SAM/
+      # Lambda package, which has no registry to push an intermediate
+      # artifact to: upload the actual built `.aws-sam/build/` directory
+      # itself as a workflow artifact, so `deploy` can download and
+      # deploy the literal bytes this job just hashed, never re-running
+      # `sam build` at all. Same upload-artifact pin already used below
+      # for unsigned-statements, for consistency.
+      - name: Upload SAM build output (deploy job consumes this, never rebuilds)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sam-build-output
+          path: .aws-sam/build/
+          if-no-files-found: error
+
       # push:branches:[main] carries no PR context of its own -- looks up
       # whichever PR GitHub associates with the pushed commit (works for
       # merge/squash/rebase alike). Empty outputs (no associated PR) is a
@@ -628,13 +651,29 @@ jobs:
   # `workflow_dispatch` is intentionally still allowed to deploy, same as
   # the original `deploy.yml`'s own trigger.
   #
-  # SIGNER_SOURCE_SHA below is a separate pin from this workflow's own
-  # ASSAY_CLI_SHA, currently identical in value -- known, not an
-  # oversight (see ASSAY_CLI_SHA's own comment above). Collapsing the
-  # two is a deliberate, separate decision this consolidation does not
-  # make as a drive-by.
+  # SIGNER_SOURCE_SHA (a separate pin from this workflow's own
+  # ASSAY_CLI_SHA -- previously "known, not an oversight," per this
+  # comment's own earlier text) no longer exists here at all: fixed
+  # 2026-09-14, this job used to vendor cli.oidc_signer from that
+  # separate pin and run its own independent `sam build`, meaning the
+  # attested subject-digest never provably described what got deployed
+  # -- see build's own "Upload SAM build output" step and this job's
+  # "Download SAM build output"/"Verify downloaded artifact" steps below
+  # for the real fix (build once, verify the exact bytes, never rebuild).
+  # This isn't the "collapse SIGNER_SOURCE_SHA into ASSAY_CLI_SHA as a
+  # drive-by" move that comment was cautioning against -- the variable is
+  # gone because this job no longer builds anything that would need it,
+  # not because the two pins were unified as a style choice. ci.yml's and
+  # sign-client.yml's own separate pins are untouched.
+  #
+  # `needs: [build, verify]` (build added alongside the pre-existing
+  # verify dependency) solely so "Verify downloaded artifact" below can
+  # read needs.build.outputs.subject-digest -- doesn't change the DAG's
+  # actual critical path, since verify already depends on build
+  # transitively. Same pattern verify's own needs: list uses above, for
+  # the same reason.
   deploy:
-    needs: verify
+    needs: [build, verify]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     # Queues rather than races a concurrent deploy against the same
@@ -650,64 +689,67 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    env:
-      SIGNER_SOURCE_SHA: "23c719bcf086488dd6aa37ade085791a8c63f75e"
     steps:
+      # Fixed 2026-09-14: this job used to check out a separately-pinned
+      # lucid-assay signer source (SIGNER_SOURCE_SHA, a DIFFERENT commit
+      # than `build`'s own ASSAY_CLI_SHA) and run its own independent
+      # `sam build --use-container` from scratch -- meaning the package
+      # actually deployed here was never provably the same bytes `build`
+      # hashed and attested. This job no longer builds anything at all;
+      # it downloads and deploys the exact `.aws-sam/build/` output
+      # `build` already produced, verified below. `checkout` is still
+      # needed for `sam deploy`'s own CLI invocation and this file's own
+      # concurrency-group name, not for building.
       - name: Checkout lucid-attest-service (this repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Read-only checkout of the one lucid-assay commit this deploy
-      # trusts -- see env.SIGNER_SOURCE_SHA's own comment above for why
-      # it can never be a workflow input. Nothing from lucid-assay is
-      # executed by this workflow itself; only the three files copied
-      # below ever ship in the Lambda's own deployment package.
-      - name: Checkout pinned lucid-assay signer source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Downloads the literal build output `build` job already produced
+      # and uploaded -- see that job's own "Upload SAM build output"
+      # step for why. `sam deploy` (below) reads `.aws-sam/build/
+      # template.yaml` from this directory by its own default convention
+      # -- the same build-once-deploy-from-artifact shape SAM's own
+      # reference CI/CD pipelines document, not an unusual pattern
+      # invented here.
+      - name: Download SAM build output (never rebuilds)
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
-          repository: lucid-provenance/lucid-assay
-          ref: ${{ env.SIGNER_SOURCE_SHA }}
-          path: _signer
-          persist-credentials: false
+          name: sam-build-output
+          path: .aws-sam/build/
 
-      # The narrow file list -- verified empirically (not just by reading
-      # imports): `python3 -c "import cli.oidc_signer"` against
-      # lucid-assay's own source loads exactly cli/__init__.py and
-      # cli/common.py from this codebase, nothing else. This Lambda only
-      # ever calls sign_statement() on bytes it already has in memory --
-      # narrower than lucid-attest's own Milestone #18 Dockerfile list,
-      # which also carries cli/sign.py, cli/provenance.py,
-      # cli/slsa_provenance.py, and cli/parsers/lockfiles.py for that
-      # image's broader file-based CLI-subcommand surface, none of which
-      # this service uses or needs.
-      - name: Vendor pinned cli.oidc_signer into src/cli/
+      # Independently re-derives the digest from the artifact this job
+      # actually downloaded -- same tar recipe `build`'s own "Compute
+      # attestation subject" step used -- and asserts it equals what got
+      # attested (needs.build.outputs.subject-digest), rather than
+      # trusting the download (or `needs.*.outputs`) at face value. Same
+      # "never trust a propagated value, re-check the actual bytes"
+      # discipline lucid-dsse-collector's own `deploy` job uses when it
+      # re-resolves its image digest from GHCR rather than trusting
+      # needs.build.outputs.image-digest directly. A mismatch here means
+      # either GitHub Actions' own artifact transport was tampered with
+      # or corrupted, or `build` computed its digest from something other
+      # than what it uploaded -- either way, this must never deploy.
+      - name: Verify downloaded artifact matches the attested digest
+        env:
+          EXPECTED_DIGEST: ${{ needs.build.outputs.subject-digest }}
         run: |
-          mkdir -p src/cli
-          cp _signer/cli/__init__.py    src/cli/__init__.py
-          cp _signer/cli/common.py      src/cli/common.py
-          cp _signer/cli/oidc_signer.py src/cli/oidc_signer.py
+          ACTUAL_DIGEST="sha256:$(tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf - -C .aws-sam/build/SignFunction . | sha256sum | cut -d' ' -f1)"
+          if [ "$ACTUAL_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "ERROR: downloaded SAM build output does not match the attested subject-digest." >&2
+            echo "  expected: $EXPECTED_DIGEST" >&2
+            echo "  actual:   $ACTUAL_DIGEST" >&2
+            exit 1
+          fi
+          echo "Verified: downloaded build output matches attested digest ($ACTUAL_DIGEST)"
 
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: arn:aws:iam::133307902115:role/lucid-attest-service-deploy
           aws-region: us-east-1
 
+      # Still needed for the `sam` CLI binary itself (sam deploy below),
+      # even though this job never calls `sam build` any more.
       - uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
-
-      # --use-container: builds inside SAM's own public.ecr.aws/sam/
-      # build-python3.13 image, matching Lambda's actual Amazon Linux 2023
-      # execution environment, rather than a local (host-Python) build.
-      # ubuntu-latest has Docker preinstalled, so this needs no extra
-      # runner setup. A plain local `sam build` failed here outright --
-      # SAM's PythonPipBuilder validates the interpreter on PATH against
-      # the pinned runtime (python3.13) and ubuntu-latest's default
-      # python3 doesn't satisfy that -- but the deeper reason to prefer
-      # --use-container over pinning a matching interpreter via
-      # actions/setup-python is Phase 2: once real dependencies with
-      # compiled C extensions (sigstore-python, cryptography, ...) land
-      # in src/requirements.txt, building on Ubuntu's glibc instead of
-      # Lambda's own runtime image risks a binary that resolves and
-      # builds fine here but subtly mismatches at execution time.
-      - run: sam build --use-container
 
       # --s3-bucket named explicitly, not --resolve-s3: the deploy role's
       # IAM policy is scoped to this one bucket by name (no s3:CreateBucket
