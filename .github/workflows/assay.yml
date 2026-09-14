@@ -329,12 +329,30 @@ jobs:
       # of (sorted relative file paths, file content) and nothing else --
       # not sensitive to anything an artifact transport could plausibly
       # gain or lose. Both jobs must keep this exact recipe identical.
+      #
+      # That fix still didn't close it -- failed a third time, identically.
+      # Added a diagnostic (PR #33: build uploads its own sorted file list
+      # as a small companion artifact; deploy diffs its post-download list
+      # against it on any mismatch) rather than a fourth guess, and the
+      # next real failure gave a definitive answer: exactly one file
+      # missing, `securesystemslib/_vendor/ed25519/.gitignore` -- a stray
+      # dotfile shipped inside a transitive dependency's own PyPI package
+      # (sigstore -> tuf -> securesystemslib), functionally inert, zero
+      # bearing on anything the Lambda actually does at runtime.
+      # actions/upload-artifact's underlying glob-matching doesn't include
+      # dotfiles/dotdirs by default -- real, confirmed behavior, not a
+      # guess this time (the file-list diff proved it directly). Real fix:
+      # `-not -path '*/.*'` excludes dotfiles/dotdirs from the digest scope
+      # on both sides, so the digest only ever covers what the artifact
+      # mechanism actually guarantees to preserve -- verified locally
+      # (both a fixture identical except for a missing nested dotfile, and
+      # this exact recipe) to produce identical digests despite the drop.
       - name: Compute attestation subject from the built SAM package
         id: subject
         run: |
           mkdir -p build
           FILELIST="build/sam-filelist.txt"
-          (cd .aws-sam/build/SignFunction && find . -type f | LC_ALL=C sort) > "$FILELIST"
+          (cd .aws-sam/build/SignFunction && find . -type f -not -path '*/.*' | LC_ALL=C sort) > "$FILELIST"
           DIGEST="$(tar --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --mode=644 \
             --no-recursion -cf - -C .aws-sam/build/SignFunction --files-from="$FILELIST" \
             | sha256sum | cut -d' ' -f1)"
@@ -808,7 +826,7 @@ jobs:
           EXPECTED_DIGEST: ${{ needs.build.outputs.subject-digest }}
         run: |
           FILELIST="$(mktemp)"
-          (cd .aws-sam/build/SignFunction && find . -type f | LC_ALL=C sort) > "$FILELIST"
+          (cd .aws-sam/build/SignFunction && find . -type f -not -path '*/.*' | LC_ALL=C sort) > "$FILELIST"
           ACTUAL_DIGEST="sha256:$(tar --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --mode=644 \
             --no-recursion -cf - -C .aws-sam/build/SignFunction --files-from="$FILELIST" \
             | sha256sum | cut -d' ' -f1)"
