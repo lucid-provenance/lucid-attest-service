@@ -10,11 +10,9 @@ narrow-vendoring discipline this service builds on.
 ## Status: Phase 2 — real signing, proven live in production
 
 `POST /v1/sign` calls straight into `cli.oidc_signer.sign_statement`,
-vendored at deploy time from a pinned `lucid-assay` source SHA
-(`.github/workflows/assay.yml`'s `deploy` job's own `SIGNER_SOURCE_SHA`
-— folded in from a wholly separate `deploy.yml` on 2026-09-14) — the same
-narrow-file, build-time-checkout pattern `lucid-attest`'s own Milestone
-#18 `build-signer-image.yml` uses, verified empirically to be an even
+vendored from a pinned `lucid-assay` source SHA — the same narrow-file
+checkout pattern `lucid-attest`'s own Milestone #18
+`build-signer-image.yml` uses, verified empirically to be an even
 narrower list than that image's (`cli/__init__.py`, `cli/common.py`,
 `cli/oidc_signer.py` only — this service calls `sign_statement()` on
 bytes it already has in memory, never the file-based
@@ -23,6 +21,23 @@ bytes it already has in memory, never the file-based
 `cli/parsers/lockfiles.py` aren't needed here). Never returns a
 fabricated placeholder on a failure path — see `src/app.py`'s module
 docstring.
+
+**Vendoring and building both happen exactly once now, in `build`, not
+in `deploy` (fixed 2026-09-14).** The deploy-consolidation pass that
+folded `deploy.yml` into `assay.yml`'s `deploy` job (same day) carried
+`deploy.yml`'s own independent `sam build --use-container` — and its own
+separate signer pin, `SIGNER_SOURCE_SHA` — over unchanged, without
+noticing that meant the attested subject-digest could never provably
+describe what actually got deployed (`build` and `deploy` were two
+independent builds, from two different pins, of what should have been
+one artifact). `SIGNER_SOURCE_SHA` no longer exists: `build` job vendors
+`cli.oidc_signer` from its own `ASSAY_CLI_SHA` and builds the real SAM
+package once; `deploy` job downloads that exact `.aws-sam/build/`
+output, independently re-derives its digest, and asserts it matches
+what got attested before ever calling `sam deploy` — never rebuilding.
+See assay.yml's `build`/`deploy` jobs' own comments for the mechanism,
+which mirrors how `lucid-dsse-collector`'s own `deploy` job re-resolves
+and deploys its image by digest rather than trusting a propagated value.
 
 **Adopted in production, 2026-09-02**: `lucid-console` and
 `lucid-dsse-collector` both cut over their `attest` job from
@@ -168,14 +183,22 @@ build/deploy race `lucid-dsse-collector` had already found and fixed:
 exact same commit, via `needs:`, instead of an independently
 `push`-triggered workflow with no ordering guarantee against this
 one) deploys on every push to `main`, via OIDC — no local `sam deploy`
-credentials needed for normal use. Two things happen before `sam
-build`:
+credentials needed for normal use.
 
-1. A read-only checkout of `lucid-assay` at the pinned `SIGNER_SOURCE_SHA`
-   into `_signer/`.
-2. The narrow `cli/oidc_signer.py` file list (see Status above) copied
-   from there into `src/cli/` — regenerated fresh from the pin on every
-   deploy, never a static copy committed into this repo.
+**`deploy` never builds anything (fixed 2026-09-14, same day, a second
+pass).** The consolidation above carried `deploy.yml`'s own independent
+`sam build --use-container` over unchanged — meaning even after fixing
+the ordering race, the package actually deployed was never provably the
+same bytes `build` had already hashed and attested; it was a second,
+separately-vendored build. Real fix: `build` job (which vendors
+`cli/oidc_signer.py` from its own `ASSAY_CLI_SHA` and runs `sam build`
+once) uploads the resulting `.aws-sam/build/` directory as a workflow
+artifact; `deploy` downloads that exact artifact, independently
+re-derives its digest from the downloaded bytes, and asserts it matches
+`needs.build.outputs.subject-digest` before ever calling `sam deploy` —
+failing closed on any mismatch rather than deploying an unverified
+package. No signer checkout, no vendoring, no build step in `deploy` at
+all any more.
 
 One manual, one-time prerequisite: the SAM artifacts bucket
 (`lucid-attest-service-sam-artifacts-133307902115-us-east-1-an`,
@@ -281,7 +304,11 @@ that verification step matters and isn't skipped.
   `ASSAY_CLI_SHA` are env-var pins, not `uses:` refs, so Dependabot's
   `github-actions` ecosystem can't auto-bump either one — true, and
   already this repo's real, lived experience (both pins have needed
-  manual re-pinning multiple times). The suggested fix (a real package
+  manual re-pinning multiple times). (`SIGNER_SOURCE_SHA` specifically no
+  longer exists in *this* workflow as of the same day's later fix above —
+  `deploy` no longer vendors anything itself — but `ci.yml` and
+  `sign-client.yml` each still carry their own separate, same-shaped pin,
+  so this bullet's substance is unchanged.) The suggested fix (a real package
   dependency pulled from a registry or a git URL) doesn't obviously
   solve the automation gap either — Dependabot doesn't reliably auto-bump
   a git-commit-pinned Python dependency any better than an env-var SHA —
