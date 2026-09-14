@@ -131,7 +131,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -320,7 +320,7 @@ jobs:
       # `sam build` at all. Same upload-artifact pin already used below
       # for unsigned-statements, for consistency.
       - name: Upload SAM build output (deploy job consumes this, never rebuilds)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sam-build-output
           path: .aws-sam/build/
@@ -424,7 +424,7 @@ jobs:
           }
 
       - name: Upload unsigned statements
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-statements
           path: |
@@ -502,7 +502,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
           cache-dependency-glob: "_assay/uv.lock"
@@ -532,7 +532,7 @@ jobs:
             sigstore-tuf-${{ runner.os }}-
 
       - name: Download signed statements
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: signed-statements
           path: build
@@ -580,7 +580,7 @@ jobs:
           cd _assay && uv run --no-sync python -m cli.verify ../build/lucid-attest-service.dsse.json "${VERIFY_ARGS[@]}"
 
       - name: Upload signed attestations
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lucid-attest-service-attestation
           path: |
@@ -711,7 +711,7 @@ jobs:
       # reference CI/CD pipelines document, not an unusual pattern
       # invented here.
       - name: Download SAM build output (never rebuilds)
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sam-build-output
           path: .aws-sam/build/
