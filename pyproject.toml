@@ -26,6 +26,25 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    # tests/live/'s own real HTTP client (see that package's conftest.py) --
+    # same library lucid-dsse-collector's own tests/live/ suite uses, for
+    # the same reason (a real, over-the-wire client, not this repo's own
+    # in-process handler() call that tests/test_app.py already covers).
+    "httpx>=0.27.0,<1.0.0",
+]
+
+[tool.pytest.ini_options]
+# tests/live/ makes real, over-the-wire HTTPS calls against the actually-
+# deployed API Gateway + Lambda (see tests/live/conftest.py's own
+# docstring) -- excluded from a bare `pytest tests/` (what `build`'s own
+# "Run tests with coverage" step runs), which has nothing real to talk
+# to. Invoked explicitly and separately (`pytest tests/live/...`) from
+# `deploy`'s own post-deploy step and regression-live.yml, once a real
+# deployed endpoint exists to test against -- same convention
+# lucid-dsse-collector's own pyproject.toml already established.
+norecursedirs = ["live"]
+markers = [
+    "stress: signs a genuinely multi-statement batch through the real deployed Lambda, producing multiple real Rekor entries -- on-demand/nightly only, never run on every auto-post-deploy check.",
 ]
 
 [tool.mutmut]
