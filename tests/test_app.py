@@ -84,19 +84,37 @@ class RequestValidationTests(unittest.TestCase):
         r = app.handler(_event("not json"), None)
         self.assertEqual(r["statusCode"], 400)
         self.assertEqual(json.loads(r["body"])["error"], "invalid_request")
+        self.assertIn("not valid JSON", json.loads(r["body"])["message"])
 
     def test_non_array_body_returns_400(self):
         r = app.handler(_event({"not": "a list"}, {"authorization": "Bearer t"}), None)
         self.assertEqual(r["statusCode"], 400)
+        # Exact-content assertion, not just the status code -- catches a
+        # mutation that mangles/nulls/cases-scrambles the message text
+        # while the status code stays correct.
+        self.assertEqual(
+            json.loads(r["body"])["message"],
+            "request body must be a JSON array of unsigned statement payloads",
+        )
 
     def test_empty_array_body_returns_400(self):
         r = app.handler(_event([], {"authorization": "Bearer t"}), None)
         self.assertEqual(r["statusCode"], 400)
+        self.assertEqual(
+            json.loads(r["body"])["message"],
+            "request body must contain at least one statement payload",
+        )
 
     def test_non_object_entry_returns_400(self):
         r = app.handler(_event([_STATEMENT, "not an object"], {"authorization": "Bearer t"}), None)
         self.assertEqual(r["statusCode"], 400)
         self.assertIn("entry 1", json.loads(r["body"])["message"])
+
+    def test_missing_body_key_entirely_is_treated_as_empty(self):
+        """No 'body' key at all (as opposed to an empty-string body) must
+        still be handled -- event.get("body", "") -- not KeyError."""
+        r = app.handler({"headers": {"authorization": "Bearer t"}}, None)
+        self.assertEqual(r["statusCode"], 400)
 
 
 class AuthorizationTests(unittest.TestCase):
@@ -104,10 +122,22 @@ class AuthorizationTests(unittest.TestCase):
         r = app.handler(_event([_STATEMENT]), None)
         self.assertEqual(r["statusCode"], 401)
         self.assertEqual(json.loads(r["body"])["error"], "unauthorized")
+        # Exact-content assertion -- catches a mutation that mangles/
+        # nulls/renames the message key or scrambles its case/text while
+        # the status code and "error" field stay correct.
+        self.assertEqual(
+            json.loads(r["body"])["message"],
+            "missing Authorization header -- the caller's own ambient OIDC "
+            "identity token must be forwarded as 'Authorization: Bearer <token>'",
+        )
 
     def test_malformed_authorization_header_returns_401(self):
         r = app.handler(_event([_STATEMENT], {"authorization": "garbage"}), None)
         self.assertEqual(r["statusCode"], 401)
+        self.assertEqual(
+            json.loads(r["body"])["message"],
+            "Authorization header must be in the form 'Bearer <token>'",
+        )
 
     def test_empty_bearer_token_returns_401(self):
         r = app.handler(_event([_STATEMENT], {"authorization": "Bearer "}), None)
@@ -125,6 +155,34 @@ class AuthorizationTests(unittest.TestCase):
         # signing (no mock here), but must not be a 401.
         self.assertNotEqual(r["statusCode"], 401)
 
+    def test_double_space_after_bearer_scheme_is_still_accepted(self):
+        """_extract_identity_token splits the header on the FIRST space
+        (str.partition), not the last -- a double space between the
+        scheme and the token must not shift what's parsed as the scheme.
+        Using rpartition here (a real mutant this caught) would instead
+        read scheme="Bearer " (trailing space, != "bearer") and 401
+        a header that should parse fine."""
+        r = app.handler(_event([_STATEMENT], {"authorization": "Bearer  token"}), None)
+        self.assertNotEqual(r["statusCode"], 401)
+
+
+class ResponseShapeTests(unittest.TestCase):
+    """_response() is a pure helper -- exercise it directly rather than
+    only through handler(), so a mutation to its literal keys/values
+    (a renamed "headers" key, a mis-cased Content-Type) can't hide
+    behind handler()'s own status-code-only assertions."""
+
+    def test_response_shape_is_exact(self):
+        r = app._response(200, {"ok": True})
+        self.assertEqual(
+            r,
+            {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"ok": True}),
+            },
+        )
+
 
 class SuccessfulSigningTests(_MockedSigstoreTestCase):
     def test_single_statement_batch_returns_200_with_one_envelope(self):
@@ -133,6 +191,20 @@ class SuccessfulSigningTests(_MockedSigstoreTestCase):
         envelopes = json.loads(r["body"])["envelopes"]
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0]["payloadType"], "application/vnd.in-toto+json")
+
+    def test_response_headers_declare_json_content_type(self):
+        r = app.handler(_event([_STATEMENT], {"authorization": "Bearer t"}), None)
+        self.assertEqual(r["headers"], {"Content-Type": "application/json"})
+
+    def test_actual_statement_bytes_reach_sign_statement_unaltered(self):
+        """_sign_batch must serialize each batch entry itself, not a
+        stand-in -- json.dumps(statement), not e.g. json.dumps(None)."""
+        distinctive_statement = {**_STATEMENT, "predicateType": "distinctive-marker"}
+        with mock.patch("app.sign_statement") as mock_sign:
+            mock_sign.return_value.to_dict.return_value = {"ok": True}
+            app.handler(_event([distinctive_statement], {"authorization": "Bearer t"}), None)
+        sent_bytes = mock_sign.call_args.args[0]
+        self.assertEqual(json.loads(sent_bytes), distinctive_statement)
 
     def test_batch_of_three_returns_envelopes_in_same_order(self):
         statements = [
