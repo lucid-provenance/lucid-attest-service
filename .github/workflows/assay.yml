@@ -925,6 +925,38 @@ jobs:
             echo "These are two different hash domains over the same package -- not expected to be equal, both recorded for independent auditability."
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # A separate job from `deploy`, not more steps in it (2026-09-14,
+  # Bill's own call, applied identically to lucid-dsse-collector's own
+  # copy of this same change): deploying and testing the deployment are
+  # two different concerns, and this way a failed deploy and a failed
+  # post-deploy test show up as two distinct results in the Actions UI,
+  # not one blurred-together job. `needs: deploy` is a real dependency
+  # (this job only ever runs against a genuinely just-deployed function),
+  # not just ordering. No `needs.deploy.outputs.*` to read, unlike
+  # lucid-dsse-collector's own version of this split -- every value this
+  # job's steps use (SIGN_ENDPOINT, the OIDC token minted below) is
+  # either a workflow-level `env:` or local to this job, never something
+  # `deploy` resolved that would otherwise need to cross a job boundary.
+  # Shares `deploy`'s own `lucid-attest-service-deploy` concurrency group
+  # so a second run's deploy can never start updating the function while
+  # this run's tests are still exercising it.
+  post-deploy-tests:
+    needs: deploy
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: lucid-attest-service-deploy
+      cancel-in-progress: false
+    permissions:
+      id-token: write # Required to mint the ambient OIDC token below -- no other step in this job needs it
+      contents: read
+    steps:
+      # Needed so tests/live/ itself and the local composite action below
+      # (a real file in this checkout, not a published marketplace
+      # action) are actually present on this job's own fresh runner.
+      - name: Checkout lucid-attest-service (this repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       # The actual close-the-loop gate: proves the function `sam deploy`
       # just updated genuinely works right now, not just that
       # CloudFormation reported success -- mirroring lucid-dsse-collector's
