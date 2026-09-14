@@ -930,20 +930,28 @@ jobs:
       # CloudFormation reported success -- mirroring lucid-dsse-collector's
       # own "Post-deploy smoke gate" step, adapted to this service's real
       # shape (stateless, single-endpoint, OIDC-gated) rather than a
-      # file-for-file port. Ported from this step's own earlier inline
-      # bash version (2026-09-14) into tests/live/ as real, individually-
-      # reportable pytest cases -- see that package's conftest.py for the
-      # full rationale, including why only test_critical_path.py's one
-      # case is allowed to actually sign (a real, permanent, public Rekor
-      # transparency-log entry per invocation -- see that file). Runs a
-      # lean, blocking subset only: test_negative_security.py (no
-      # ambient identity needed) and test_critical_path.py (needs a real
-      # one, minted below). test_request_validation.py and the
-      # `stress`-marked batch case are deliberately left to
-      # regression-live.yml's own nightly/on-demand cadence, same
-      # reasoning lucid-dsse-collector's own smoke-vs-regression split
-      # uses -- keep this gate fast and let a slower/heavier check never
-      # block shipping a fix.
+      # file-for-file port.
+      #
+      # No separate scheduled/nightly workflow (a regression-live.yml was
+      # tried and removed the same day, 2026-09-14): this platform doesn't
+      # run tests on a clock, only against a real commit landing on main --
+      # a schedule trigger would mean this service's own real, permanent,
+      # public Rekor transparency-log entries get minted unattended,
+      # indefinitely, regardless of whether anything changed. Every
+      # tests/live/ file runs here instead, on every real deploy, staged
+      # into its own step in ascending order of cost -- GitHub Actions
+      # already stops a job at its first failing step, so a step here
+      # never runs unless every earlier, cheaper step just passed:
+      #   1. test_negative_security.py -- no ambient identity, no Lambda
+      #      invocation at all (rejected by the API Gateway authorizer).
+      #   2. test_request_validation.py -- needs a real token to clear
+      #      the authorizer, but app.py rejects these before signing, so
+      #      still zero Sigstore/Rekor cost.
+      #   3. test_critical_path.py -- the first step that actually signs:
+      #      one real, permanent Rekor entry.
+      #   4. test_batch_stress.py (`stress`-marked) -- the most expensive
+      #      case, five more real Rekor entries; only ever reached once
+      #      1-3 have already proven the deployment is genuinely sound.
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -962,19 +970,42 @@ jobs:
         id: verify-live
         uses: ./.github/actions/mint-sigstore-oidc-token
 
-      - name: Post-deploy smoke gate (auth boundary / real sign + Rekor)
+      # Every step below shares this env block (`env:` at the step level,
+      # repeated rather than hoisted to the job, since the earlier steps
+      # in this same job don't need either value and shouldn't inherit
+      # them by accident). LIVE_SIGN_ENDPOINT is routed through env
+      # explicitly rather than relying on conftest.py's own hardcoded
+      # default matching SIGN_ENDPOINT above -- the same "don't trust two
+      # copies of a literal to stay in sync silently" discipline this
+      # repo already applies elsewhere.
+      - name: Stage 1/4 -- auth boundary (no signing, no ambient identity needed)
         env:
-          # Routed through env explicitly rather than relying on
-          # conftest.py's own hardcoded default matching SIGN_ENDPOINT
-          # above -- the same "don't trust two copies of a literal to
-          # stay in sync silently" discipline this repo already applies
-          # elsewhere (see SIGN_ENDPOINT's own comment).
+          LIVE_SIGN_ENDPOINT: ${{ env.SIGN_ENDPOINT }}
+        run: |
+          mkdir -p build
+          uv run --no-sync --no-build python3 -m pytest tests/live/test_negative_security.py \
+            --junitxml=build/live-stage1-negative-security-junit.xml -v
+
+      - name: Stage 2/4 -- request validation (real identity, still no signing)
+        env:
           LIVE_SIGN_ENDPOINT: ${{ env.SIGN_ENDPOINT }}
           LIVE_OIDC_TOKEN: ${{ steps.verify-live.outputs.token }}
         run: |
-          mkdir -p build
-          uv run --no-sync --no-build python3 -m pytest \
-            tests/live/test_negative_security.py \
-            tests/live/test_critical_path.py \
-            --junitxml=build/live-smoke-junit.xml \
-            -v
+          uv run --no-sync --no-build python3 -m pytest tests/live/test_request_validation.py \
+            --junitxml=build/live-stage2-request-validation-junit.xml -v
+
+      - name: Stage 3/4 -- critical path (real sign + Rekor, 1 entry)
+        env:
+          LIVE_SIGN_ENDPOINT: ${{ env.SIGN_ENDPOINT }}
+          LIVE_OIDC_TOKEN: ${{ steps.verify-live.outputs.token }}
+        run: |
+          uv run --no-sync --no-build python3 -m pytest tests/live/test_critical_path.py \
+            --junitxml=build/live-stage3-critical-path-junit.xml -v
+
+      - name: Stage 4/4 -- batch stress (real sign + Rekor, 5 more entries)
+        env:
+          LIVE_SIGN_ENDPOINT: ${{ env.SIGN_ENDPOINT }}
+          LIVE_OIDC_TOKEN: ${{ steps.verify-live.outputs.token }}
+        run: |
+          uv run --no-sync --no-build python3 -m pytest tests/live/test_batch_stress.py \
+            --junitxml=build/live-stage4-batch-stress-junit.xml -v
