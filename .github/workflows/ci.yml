@@ -25,9 +25,10 @@ permissions:
   contents: read
 
 env:
-  # Mirrors deploy.yml's own pin -- see that file's comment for what this
-  # governs and why it's a hardcoded literal, never a workflow input.
-  # Bump both together.
+  # Mirrors assay.yml's `deploy` job's own pin (folded in from a
+  # wholly separate deploy.yml on 2026-09-14) -- see that job's comment
+  # for what this governs and why it's a hardcoded literal, never a
+  # workflow input. Bump both together.
   SIGNER_SOURCE_SHA: "23c719bcf086488dd6aa37ade085791a8c63f75e"
 
 jobs:

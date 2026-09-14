@@ -5,12 +5,21 @@ __pycache__/
 .coverage
 .pytest_cache/
 
-# Build-time-only: deploy.yml's checkout of the pinned lucid-assay signer
-# source (never committed here) and the narrow cli/oidc_signer.py file
-# list it vendors into src/cli/ (regenerated fresh on every deploy from
-# that pin -- see deploy.yml's "Vendor pinned cli.oidc_signer" step and
-# its own comment for why this is never a static copy checked into this
-# repo). A local dev run reproduces the same two steps by hand -- see
-# README's "Local development" section.
+# uv-managed venv (added 2026-09-14 alongside pyproject.toml/uv.lock, so
+# mutation testing's own `uv run --no-sync` has a real environment to
+# reuse) and mutmut's own generated-mutant cache -- both local/CI-run
+# artifacts, never committed, matching lucid-dsse-collector's/lucid-
+# assay's own convention.
+.venv/
+mutants/
+.mutmut-cache
+
+# Build-time-only: assay.yml's `deploy` job's checkout of the pinned
+# lucid-assay signer source (never committed here) and the narrow
+# cli/oidc_signer.py file list it vendors into src/cli/ (regenerated
+# fresh on every deploy from that pin -- see that job's "Vendor pinned
+# cli.oidc_signer" step and its own comment for why this is never a
+# static copy checked into this repo). A local dev run reproduces the
+# same two steps by hand -- see README's "Local development" section.
 _signer/
 src/cli/

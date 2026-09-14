@@ -66,7 +66,9 @@ env:
   # install step is needed for it, just this checkout.
   #
   # A hardcoded literal, never a workflow_call input, same discipline as
-  # deploy.yml/ci.yml's own SIGNER_SOURCE_SHA: which lucid-assay commit's
+  # assay.yml's `deploy` job (folded in from a wholly separate
+  # deploy.yml on 2026-09-14) / ci.yml's own SIGNER_SOURCE_SHA: which
+  # lucid-assay commit's
   # provenance-construction code this job runs is a deliberate,
   # reviewable commit to *this* file, not a caller-controlled value.
   #
@@ -81,9 +83,10 @@ env:
   # Lucid vault's "Signer SHA pinning pain" note.
   PROVENANCE_SOURCE_SHA: "23c719bcf086488dd6aa37ade085791a8c63f75e"
 
-  # This stack's known, stable HTTP API URL -- see deploy.yml's own
-  # SignEndpoint output comment for how to re-resolve it if it ever
-  # changes.
+  # This stack's known, stable HTTP API URL -- see this repo's own
+  # template.yaml, the `SignEndpoint` output, for how to re-resolve it
+  # if it ever changes (`sam deploy`, run from assay.yml's `deploy` job,
+  # prints the same value on every successful deploy).
   SIGN_ENDPOINT: https://84qfszyk5h.execute-api.us-east-1.amazonaws.com/v1/sign
 
   # This file's OWN identity -- MUST exactly match the entry this

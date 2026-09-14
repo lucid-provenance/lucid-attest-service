@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lucid-attest-service"
+version = "0.1.0"
+description = "Serverless signing service (Lucid roadmap #12) -- POST /v1/sign, backed by lucid-assay's own cli.oidc_signer.sign_statement"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "Proprietary" }
+# The exact same closure src/requirements.txt hash-pins for the Lambda's
+# own deployed runtime (see that file's own header for how it's
+# generated from lucid-assay's uv.lock at SIGNER_SOURCE_SHA) -- this
+# pyproject.toml is deliberately a SEPARATE thing, not a replacement:
+# src/requirements.txt is what `sam build` actually ships in the deployed
+# package, still generated and hash-verified exactly as before. This file
+# exists only to give CI's own test/mutation-testing environment a real
+# uv-managed .venv to run against -- see [tool.mutmut] below for why that
+# has to exist at all.
+dependencies = [
+    "sigstore>=3.0.0,<5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[tool.mutmut]
+# Required for lucid-assay's diff-scoped mutation testing (cli/mutation/
+# python_runner.py) to work at all here -- without source_paths, mutmut
+# can't guess where the code to mutate is. Added 2026-09-14 alongside
+# this repo's own first real ASSAY_CLI_SHA bump past the point mutation
+# testing was introduced (lucid-assay PR #96) -- this repo had neither a
+# pyproject.toml nor a uv-managed .venv before now, both required by
+# _run_mutmut()'s own `uv run --with mutmut==<pinned> --no-sync` -- see
+# lucid-assay's own CLAUDE.md, "python_runner.py invokes mutmut via `uv
+# run --with`, not `sys.executable`" entry, for the exact failure mode
+# skipping this step would reproduce.
+#
+# src/ only -- src/cli/ is vendored, regenerated fresh from lucid-assay
+# at build time (see assay.yml's own "Vendor pinned cli.oidc_signer"
+# step), never this repo's own code to mutate.
+source_paths = ["src"]
+only_mutate = ["src/app.py"]
+pytest_add_cli_args_test_selection = ["tests"]

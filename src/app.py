@@ -29,6 +29,25 @@ in the same order. All-or-nothing: if any statement in the batch fails to
 sign, the whole request fails closed with a 502 rather than returning a
 partial list a caller would have to reconcile against its own request to
 figure out which entries actually got signed.
+
+Mutation testing (lucid-assay's diff-scoped `cli/mutation/`, enabled here
+2026-09-14): 136/142 mutants killed (95.8%). The residual 6 survivors are
+genuine equivalent mutants, confirmed empirically (not assumed) rather
+than chased -- no test can distinguish them because there's no input for
+which they produce different behavior:
+  - `_extract_identity_token`'s `auth_header = None` -> `auth_header = ""`
+    seed value: only ever read via `if not auth_header`, and both are
+    falsy, so this can never surface.
+  - `_sign_batch`'s `.encode("utf-8")` -> `.encode("UTF-8")`: Python's
+    codec lookup is case-insensitive: identical bytes either way.
+  - `_parse_request_body`'s `raw_body or ""` -> `raw_body or "XXXX"`,
+    and `handler`'s `event.get("body", "")` -> `event.get("body", None)`
+    / `event.get("body", "XXXX")` (3 mutants): all three only matter
+    when the body is missing/falsy, and `json.loads("")` and
+    `json.loads("XXXX")` raise the exact same
+    `"Expecting value: line 1 column 1 (char 0)"` message -- confirmed
+    directly, not inferred -- so the wrapping RequestValidationError's
+    text is byte-for-byte identical regardless of which default fires.
 """
 from __future__ import annotations
 

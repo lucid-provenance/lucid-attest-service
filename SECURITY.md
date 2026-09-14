@@ -32,8 +32,8 @@ In scope:
 - Vendored signing code (`src/cli/oidc_signer.py`, pinned from
   `lucid-assay` via `SIGNER_SOURCE_SHA`) and how it's wired into this
   service's Lambda handler
-- Deployment configuration (`.github/workflows/deploy.yml`,
-  `sign-client.yml`) — pinning, permissions, secret handling
+- Deployment configuration (`.github/workflows/assay.yml`'s `deploy`
+  job, `sign-client.yml`) — pinning, permissions, secret handling
 
 Out of scope:
 - Vulnerabilities in third-party dependencies themselves — please report

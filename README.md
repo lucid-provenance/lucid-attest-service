@@ -11,7 +11,8 @@ narrow-vendoring discipline this service builds on.
 
 `POST /v1/sign` calls straight into `cli.oidc_signer.sign_statement`,
 vendored at deploy time from a pinned `lucid-assay` source SHA
-(`.github/workflows/deploy.yml`'s `SIGNER_SOURCE_SHA`) — the same
+(`.github/workflows/assay.yml`'s `deploy` job's own `SIGNER_SOURCE_SHA`
+— folded in from a wholly separate `deploy.yml` on 2026-09-14) — the same
 narrow-file, build-time-checkout pattern `lucid-attest`'s own Milestone
 #18 `build-signer-image.yml` uses, verified empirically to be an even
 narrower list than that image's (`cli/__init__.py`, `cli/common.py`,
@@ -160,9 +161,15 @@ trust.
 
 ## Deploy
 
-GitHub Actions (`.github/workflows/deploy.yml`) deploys on every push to
-`main`, via OIDC — no local `sam deploy` credentials needed for normal
-use. Two things happen before `sam build`:
+GitHub Actions (`.github/workflows/assay.yml`'s `deploy` job — folded
+in from a wholly separate `deploy.yml` on 2026-09-14, closing the same
+build/deploy race `lucid-dsse-collector` had already found and fixed:
+`deploy` now runs only after `build`/`attest`/`verify` all pass on the
+exact same commit, via `needs:`, instead of an independently
+`push`-triggered workflow with no ordering guarantee against this
+one) deploys on every push to `main`, via OIDC — no local `sam deploy`
+credentials needed for normal use. Two things happen before `sam
+build`:
 
 1. A read-only checkout of `lucid-assay` at the pinned `SIGNER_SOURCE_SHA`
    into `_signer/`.
@@ -192,9 +199,9 @@ adopting this service would copy.
 
 ## Local development
 
-Vendor the signer source by hand first (mirrors what `deploy.yml` does
-at deploy time — see its own comments for exactly why this is a
-build-time step, not a committed copy):
+Vendor the signer source by hand first (mirrors what `assay.yml`'s
+`deploy` job does at deploy time — see its own comments for exactly
+why this is a build-time step, not a committed copy):
 
 ```bash
 mkdir -p src/cli
@@ -204,8 +211,8 @@ cp /path/to/lucid-assay/cli/oidc_signer.py src/cli/oidc_signer.py
 ```
 
 Then `sam build --use-container && sam local invoke SignFunction`
-(`--use-container`: see `deploy.yml`'s own comment on why a plain local
-build isn't used here). A real Sigstore round-trip additionally needs a
+(`--use-container`: see `assay.yml`'s `deploy` job's own comment on why
+a plain local build isn't used here). A real Sigstore round-trip additionally needs a
 valid caller-supplied identity token in the invoke event's
 `Authorization` header — see `events/` (if present) or construct one by
 hand against the `handler(event, context)` shape in `src/app.py`.
@@ -218,3 +225,67 @@ this repo). The fuller vulnerability-management and secure-SDLC policy
 governing how findings get triaged, fixed, or formally risk-accepted
 lives in [`lucid-provenance/compliance`](https://github.com/lucid-provenance/compliance)
 (private).
+
+### Independent architectural review, 2026-09-14
+
+An independent review (Gemini) raised four findings. Each was checked
+against the real code/config before being accepted or rejected — see
+lucid-assay's own CLAUDE.md "Independent code review" precedent for why
+that verification step matters and isn't skipped.
+
+- **API Gateway had no authorizer — confirmed and fixed.** `template.yaml`
+  had no `Auth:` block at all: every request, including anonymous/junk
+  ones, reached `SignFunction` and paid for a full Lambda invocation
+  before `app.py`'s own header checks ever ran — a real billing/compute-
+  exhaustion surface. Fixed via a native HTTP API JWT authorizer
+  (`Globals.HttpApi.Auth`) scoped to GitHub Actions' own OIDC issuer and
+  the exact `audience: sigstore` every real caller (`sign-client.yml`,
+  `smoke-test-sign.yml`) already mints its token for — rejects a request
+  that isn't even a well-formed, correctly-issued token at the API
+  Gateway edge, before Lambda runs. **Deliberately does not and cannot**
+  restrict *which* repo/workflow may call this endpoint — every
+  legitimate caller mints its own token under its own identity, which is
+  the whole point of a shared signing endpoint; that's a distinct
+  problem (see the next item) a token-shaped-and-audience check can't
+  solve. Not yet exercised against a real deploy + a real smoke-test run
+  as of this writing — the next `smoke-test-sign.yml` run after this
+  merges is the actual confirmation, not this description.
+- **The signer blindly signs whatever statement it's handed — confirmed,
+  not new, not fixed here.** Verified directly against
+  `cli.oidc_signer.sign_statement`: it performs zero re-validation of a
+  statement's *content* (RCS score, subject digest, test results, ...)
+  before signing it — a compromised caller can request a signature over
+  fabricated claims and get a validly-signed DSSE envelope back. Real,
+  but this is the same, already-tracked platform-wide gap as lucid-assay
+  itself shipping a fabricated subject digest in its own dogfood run
+  (Bill's own priority-1 item going into this session) — the isolated
+  signer was only ever designed to bind a trusted *identity* to the
+  signature (which it does: see `TRUSTED_CONTROL_PLANE_BUILDER_IDS` and
+  SLSA Build L3's control-plane-builder-identity/isolated-provenance-
+  generation checks), never to independently re-derive or verify the
+  claims it's asked to sign — that would require the signer to re-run
+  scoring/verification logic server-side, a materially larger design
+  change than anything else in this pass, and isn't attempted here.
+- **Missing OIDC token validation — checked, rejected.** The claim that
+  "no length limit or structural validation" occurs before a token
+  reaches the signing context doesn't hold up against the actual
+  installed library: `sigstore.oidc.IdentityToken.__init__` already
+  calls `jwt.decode()` with `required=["aud","sub","iat","exp","iss"]`
+  and raises a clean `IdentityError` on anything malformed, oversized,
+  or garbage — caught by `oidc_signer.py`'s existing exception handling
+  and turned into a normal 502, not a crash or unbounded resource
+  consumption. No injection vector exists either (a JWT decode, not
+  eval/exec). Not fixed, because there was nothing to fix as described.
+- **SHA-pinned vendoring requires a manual bump — confirmed, not a new
+  problem, "durable fix" not applied.** `SIGNER_SOURCE_SHA`/
+  `ASSAY_CLI_SHA` are env-var pins, not `uses:` refs, so Dependabot's
+  `github-actions` ecosystem can't auto-bump either one — true, and
+  already this repo's real, lived experience (both pins have needed
+  manual re-pinning multiple times). The suggested fix (a real package
+  dependency pulled from a registry or a git URL) doesn't obviously
+  solve the automation gap either — Dependabot doesn't reliably auto-bump
+  a git-commit-pinned Python dependency any better than an env-var SHA —
+  and would pull a larger, harder-to-audit surface directly into a
+  Lambda that holds real signing privilege, the opposite of this
+  service's own narrow-vendoring rationale (see Status above). Left as
+  the same known, deliberate tradeoff it already was.

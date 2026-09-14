@@ -56,16 +56,26 @@ on:
 # github.event.pull_request.number (not github.ref, the synthetic
 # "<number>/merge" ref on a pull_request event) groups a PR's own
 # synchronize-triggered runs together across pushes.
+#
+# The push/workflow_dispatch fallback is github.sha, not github.ref --
+# fixed alongside folding `deploy` into this workflow (see that job's
+# own comment): with `deploy` now part of this same run, keying by
+# github.ref alone would group *every* push to main into one
+# concurrency slot forever, so a second push landing while an earlier
+# commit's `deploy` job is mid-flight would cancel that in-progress
+# deploy outright -- the exact class of bug found and fixed in
+# lucid-dsse-collector's own copy of this file on 2026-09-13.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
-# No id-token: write at the workflow level -- granted only to `attest`.
-# `build` runs this repo's own tests and builds its real SAM package; it
-# must never be able to reach the Sigstore signing credential itself, and
-# critically must never gain AWS credentials either (unlike deploy.yml,
-# this workflow never calls aws-actions/configure-aws-credentials at all
-# -- the SAM build step below is purely local, no AWS API calls).
+# No id-token: write at the workflow level -- granted only to `attest`
+# and `deploy` (job-level overrides, both below). `build` runs this
+# repo's own tests and builds its real SAM package; it must never be
+# able to reach the Sigstore signing credential itself, and critically
+# must never gain AWS credentials either -- it never calls
+# aws-actions/configure-aws-credentials at all, unlike `deploy` -- the
+# SAM build step here is purely local, no AWS API calls.
 permissions:
   contents: read
 
@@ -82,7 +92,7 @@ permissions:
 # already-working workflows' own pinning discipline, which deserves its
 # own deliberate PR, not a drive-by bundled into new work.
 env:
-  ASSAY_CLI_SHA: ce7da26fc9d549f15b784d08549da9be298b9fe3 # lucid-assay main: PR #81 (--require-slsa-build-l3 enabled as a hard gate in lucid-assay's own dogfood workflow), #82 (Repository & Workstation Governance: predicate.repository_governance, --require-commit-signing opt-in gate), 2026-09-04 -- confirmed via a real green run of lucid-assay's own dogfood Score & attest workflow at this exact commit
+  ASSAY_CLI_SHA: f1b9bc30dd851398c80830380c31a27bee5d2c25 # lucid-assay main: PR #100 (fix(mutation-testing): combine stdout+stderr instead of preferring stderr), 2026-09-14. Jumps this pin forward ~20 PRs (was PR #81/#82, 2026-09-04) specifically to bring in mutation testing (introduced PR #96, absent entirely at the old pin) -- this repo needed a real pyproject.toml/uv.lock/[tool.mutmut] first (added the same day, see build's own "Install this repo's own runtime + test dependencies" step) since _run_mutmut()'s `uv run --with mutmut==<pinned> --no-sync` requires an already-synced project venv to reuse, which this repo never had. Every CLI flag this workflow already depends on (--min-rcs, --expected-repository/--ref/--workflow, --cert-identity/--cert-oidc-issuer, --slsa-envelope, --require-slsa-build-l3, --write-verdict, --subject-name/--subject-digest, --coverage-report, --junit-xml, --sbom, --head-sha, --repository, --branch, --github-token, --repo-dir) confirmed still present at the new pin before bumping, not assumed. Real first measurement, confirmed by an actual local mutmut run against this exact pyproject.toml/uv.lock before this pin ever shipped: 105/142 mutants killed (73.9%, the "degraded" tier, ×0.85 multiplier). Closed same day, not left as a gap: added exact-message/exact-shape assertions to tests/test_app.py (status-code-only assertions were letting mangled/nulled error messages, missing response headers, and a mis-serialized signing payload all survive) -- re-measured at 136/142 (95.8%, "passed" tier, ×1.0 multiplier). The residual 6 survivors are genuine equivalent mutants, confirmed empirically and documented in src/app.py's own module docstring (not chased -- there is no input for which they behave differently).
 
 jobs:
   # Runs this repo's own tests (against the same vendored cli.oidc_signer
@@ -124,7 +134,9 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
-          cache-dependency-glob: "_assay/uv.lock"
+          cache-dependency-glob: |
+            _assay/uv.lock
+            uv.lock
 
       # --no-build: refuses to build any dependency from a source
       # distribution (which would otherwise invoke that package's own
@@ -177,20 +189,39 @@ jobs:
           cp _assay/cli/common.py      src/cli/common.py
           cp _assay/cli/oidc_signer.py src/cli/oidc_signer.py
 
-      - name: Install runtime + test dependencies
-        run: |
-          python3 -m pip install --require-hashes -r src/requirements.txt
-          python3 -m pip install -r requirements-dev.txt
+      # Replaces a plain `pip install --require-hashes -r
+      # src/requirements.txt` + `pip install -r requirements-dev.txt`
+      # (2026-09-14, alongside adding pyproject.toml/uv.lock): the real
+      # reason for this repo's own uv-managed .venv is mutation testing
+      # (lucid-assay's cli/mutation/python_runner.py, via `uv run --with
+      # mutmut==<pinned> --no-sync`) -- that invocation needs a real,
+      # already-synced project venv to reuse, which a bare pip install
+      # into the runner's system Python never provided. `--frozen`
+      # refuses to deviate from the committed uv.lock at all, the same
+      # (and stronger) integrity guarantee the old --require-hashes flag
+      # gave; `--no-install-project` mirrors the `_assay/` sync above --
+      # this repo isn't structured as an installable package either
+      # (tests/test_app.py locates src/app.py via a plain sys.path
+      # insert, not an import of an installed distribution). Deliberately
+      # does NOT replace src/requirements.txt itself -- that file is
+      # still what `sam build` actually ships in the deployed Lambda
+      # package (see its own header comment); this is a second, separate
+      # dependency declaration purely for this job's own test/mutation
+      # environment.
+      - name: Install this repo's own runtime + test dependencies
+        run: uv sync --frozen --extra dev --no-build --no-install-project
 
       # --junitxml/--cov feed lucid-assay's own --junit-xml/--coverage-
       # report below -- ci.yml's own `python3 -m pytest -v tests/` never
       # needed either, since it doesn't mint an attestation. pytest-cov's
       # XML report is Cobertura-shaped (the --coverage-format default),
-      # not a separate flag to add.
+      # not a separate flag to add. `uv run --no-sync` (not a bare
+      # `python3 -m pytest`), so this genuinely runs inside the venv
+      # `uv sync` above just created, not the runner's own system Python.
       - name: Run tests with coverage
         run: |
           mkdir -p build
-          python3 -m pytest -v --junitxml=build/junit.xml --cov=src --cov-report=xml:build/coverage.xml tests/
+          uv run --no-sync python3 -m pytest -v --junitxml=build/junit.xml --cov=src --cov-report=xml:build/coverage.xml tests/
 
       - name: Lint SAM template
         uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
@@ -245,12 +276,13 @@ jobs:
             -o sarif=build/grype.sarif
           test -s build/grype.sarif || { echo "ERROR: Grype did not produce build/grype.sarif" >&2; exit 1; }
 
-      # --use-container: matches deploy.yml's own real build exactly (see
-      # that workflow's own comment for why -- Lambda's actual Amazon
-      # Linux 2023 execution environment, not ubuntu-latest's glibc) --
-      # so the attestation subject below genuinely reflects what would
-      # ship, not a faster-but-different local build. No AWS credentials
-      # needed for this step; only sam deploy (not called here) does.
+      # --use-container: matches the `deploy` job's own real build
+      # exactly (see that job's own comment for why -- Lambda's actual
+      # Amazon Linux 2023 execution environment, not ubuntu-latest's
+      # glibc) -- so the attestation subject below genuinely reflects
+      # what would ship, not a faster-but-different local build. No AWS
+      # credentials needed for this step; only sam deploy (in `deploy`,
+      # not called here) does.
       - name: Build SAM package
         run: sam build --use-container
 
@@ -572,3 +604,131 @@ jobs:
           done
 
           curl -sSf -X POST "${COLLECTOR_URL%/}/api/v1/attestations" "${FORM_ARGS[@]}"
+
+  # Deploys the SAM stack via GitHub Actions OIDC -- no static AWS keys
+  # anywhere. Folded in from a wholly separate `deploy.yml` (2026-09-14),
+  # closing the same architecture gap already found and fixed in
+  # lucid-dsse-collector's own copy of this file (2026-09-13): that file
+  # had its own independent `push: branches: [main]` trigger, racing
+  # this workflow's own push-triggered run on the identical commit, with
+  # no ordering guarantee between them at all -- whether the deployed
+  # Lambda package was even built from a commit that had passed `verify`
+  # was never actually checked, just assumed from both firing off the
+  # same push. `needs: verify` below means this job structurally cannot
+  # start before `build`/`attest`/`verify` have all completed on this
+  # exact commit -- no polling, no second workflow run, no race. Not a
+  # reversion to the `workflow_run` pattern this platform has already
+  # ruled out elsewhere for the same "pwn request" reason -- `needs:`
+  # sequences jobs *within* one triggered run, off one event; it never
+  # checks out another run's `head_sha` under a different trigger's
+  # privilege context.
+  #
+  # `if: github.event_name != 'pull_request'` -- this workflow also runs
+  # on `pull_request`, and an unreviewed PR must never deploy.
+  # `workflow_dispatch` is intentionally still allowed to deploy, same as
+  # the original `deploy.yml`'s own trigger.
+  #
+  # SIGNER_SOURCE_SHA below is a separate pin from this workflow's own
+  # ASSAY_CLI_SHA, currently identical in value -- known, not an
+  # oversight (see ASSAY_CLI_SHA's own comment above). Collapsing the
+  # two is a deliberate, separate decision this consolidation does not
+  # make as a drive-by.
+  deploy:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # Queues rather than races a concurrent deploy against the same
+    # stack -- the workflow-level concurrency group above is now keyed
+    # by github.sha, so two different commits' own deploy jobs could in
+    # principle run at the same time without this; cancel-in-progress:
+    # false so a queued deploy always still runs (never silently
+    # dropped), matching lucid-dsse-collector's own `deploy-staging`
+    # job-level guard.
+    concurrency:
+      group: lucid-attest-service-deploy
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      SIGNER_SOURCE_SHA: "23c719bcf086488dd6aa37ade085791a8c63f75e"
+    steps:
+      - name: Checkout lucid-attest-service (this repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Read-only checkout of the one lucid-assay commit this deploy
+      # trusts -- see env.SIGNER_SOURCE_SHA's own comment above for why
+      # it can never be a workflow input. Nothing from lucid-assay is
+      # executed by this workflow itself; only the three files copied
+      # below ever ship in the Lambda's own deployment package.
+      - name: Checkout pinned lucid-assay signer source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lucid-provenance/lucid-assay
+          ref: ${{ env.SIGNER_SOURCE_SHA }}
+          path: _signer
+          persist-credentials: false
+
+      # The narrow file list -- verified empirically (not just by reading
+      # imports): `python3 -c "import cli.oidc_signer"` against
+      # lucid-assay's own source loads exactly cli/__init__.py and
+      # cli/common.py from this codebase, nothing else. This Lambda only
+      # ever calls sign_statement() on bytes it already has in memory --
+      # narrower than lucid-attest's own Milestone #18 Dockerfile list,
+      # which also carries cli/sign.py, cli/provenance.py,
+      # cli/slsa_provenance.py, and cli/parsers/lockfiles.py for that
+      # image's broader file-based CLI-subcommand surface, none of which
+      # this service uses or needs.
+      - name: Vendor pinned cli.oidc_signer into src/cli/
+        run: |
+          mkdir -p src/cli
+          cp _signer/cli/__init__.py    src/cli/__init__.py
+          cp _signer/cli/common.py      src/cli/common.py
+          cp _signer/cli/oidc_signer.py src/cli/oidc_signer.py
+
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: arn:aws:iam::133307902115:role/lucid-attest-service-deploy
+          aws-region: us-east-1
+
+      - uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
+
+      # --use-container: builds inside SAM's own public.ecr.aws/sam/
+      # build-python3.13 image, matching Lambda's actual Amazon Linux 2023
+      # execution environment, rather than a local (host-Python) build.
+      # ubuntu-latest has Docker preinstalled, so this needs no extra
+      # runner setup. A plain local `sam build` failed here outright --
+      # SAM's PythonPipBuilder validates the interpreter on PATH against
+      # the pinned runtime (python3.13) and ubuntu-latest's default
+      # python3 doesn't satisfy that -- but the deeper reason to prefer
+      # --use-container over pinning a matching interpreter via
+      # actions/setup-python is Phase 2: once real dependencies with
+      # compiled C extensions (sigstore-python, cryptography, ...) land
+      # in src/requirements.txt, building on Ubuntu's glibc instead of
+      # Lambda's own runtime image risks a binary that resolves and
+      # builds fine here but subtly mismatches at execution time.
+      - run: sam build --use-container
+
+      # --s3-bucket named explicitly, not --resolve-s3: the deploy role's
+      # IAM policy is scoped to this one bucket by name (no s3:CreateBucket
+      # at all -- bucket creation is a one-time, human, out-of-band step).
+      # Letting SAM auto-manage its own bucket would pick a name this
+      # policy was never scoped to and fail closed with AccessDenied.
+      #
+      # Bucket created 2026-09-02 in S3's account-Regional namespace (AWS's
+      # current recommended default over the classic global namespace) --
+      # that namespace always appends an account+region suffix to whatever
+      # prefix you type, so the real bucket name isn't the bare
+      # "lucid-attest-service-sam-artifacts" prefix, it's the full name
+      # below, exactly as the console computed it. --s3-prefix (SAM's own
+      # object-key prefix *inside* the bucket, unrelated to S3's bucket-
+      # namespace prefix above) is untouched.
+      - run: |
+          sam deploy \
+            --stack-name lucid-attest-service \
+            --s3-bucket lucid-attest-service-sam-artifacts-133307902115-us-east-1-an \
+            --s3-prefix lucid-attest-service \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --region us-east-1
