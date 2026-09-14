@@ -95,6 +95,17 @@ permissions:
 # below -- removing that copy entirely rather than requiring it be kept
 # in sync.)
 env:
+  # This stack's known, stable HTTP API URL -- same value sign-client.yml's
+  # own copy uses (kept in sync manually; both are a hardcoded literal
+  # pointing at the one real deployed endpoint, not a workflow_call input,
+  # since neither file has anywhere else to source it from without an
+  # AWS API round-trip). Used below by `deploy`'s own post-deploy
+  # functional-verification step -- see that step's comment for why this
+  # job needs it too, not just sign-client.yml. Re-resolve via `aws
+  # cloudformation describe-stacks --stack-name lucid-attest-service
+  # --query "Stacks[0].Outputs[?OutputKey=='SignEndpoint'].OutputValue"`
+  # if it ever changes.
+  SIGN_ENDPOINT: https://84qfszyk5h.execute-api.us-east-1.amazonaws.com/v1/sign
   ASSAY_CLI_SHA: f1b9bc30dd851398c80830380c31a27bee5d2c25 # lucid-assay main: PR #100 (fix(mutation-testing): combine stdout+stderr instead of preferring stderr), 2026-09-14. Jumps this pin forward ~20 PRs (was PR #81/#82, 2026-09-04) specifically to bring in mutation testing (introduced PR #96, absent entirely at the old pin) -- this repo needed a real pyproject.toml/uv.lock/[tool.mutmut] first (added the same day, see build's own "Install this repo's own runtime + test dependencies" step) since _run_mutmut()'s `uv run --with mutmut==<pinned> --no-sync` requires an already-synced project venv to reuse, which this repo never had. Every CLI flag this workflow already depends on (--min-rcs, --expected-repository/--ref/--workflow, --cert-identity/--cert-oidc-issuer, --slsa-envelope, --require-slsa-build-l3, --write-verdict, --subject-name/--subject-digest, --coverage-report, --junit-xml, --sbom, --head-sha, --repository, --branch, --github-token, --repo-dir) confirmed still present at the new pin before bumping, not assumed. Real first measurement, confirmed by an actual local mutmut run against this exact pyproject.toml/uv.lock before this pin ever shipped: 105/142 mutants killed (73.9%, the "degraded" tier, ×0.85 multiplier). Closed same day, not left as a gap: added exact-message/exact-shape assertions to tests/test_app.py (status-code-only assertions were letting mangled/nulled error messages, missing response headers, and a mis-serialized signing payload all survive) -- re-measured at 136/142 (95.8%, "passed" tier, ×1.0 multiplier). The residual 6 survivors are genuine equivalent mutants, confirmed empirically and documented in src/app.py's own module docstring (not chased -- there is no input for which they behave differently).
 
 jobs:
@@ -874,3 +885,118 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --region us-east-1
+
+      # Diagnostic, not a gate: `sam deploy` succeeding above only proves
+      # CloudFormation accepted the changeset, not that the specific bytes
+      # this run attested are what's actually live -- closing an
+      # architecture-audit finding (2026-09-14) that this repo, unlike
+      # lucid-dsse-collector's own `deploy` job, had no step at all that
+      # looked at the *running* function after deploy. CodeSha256 is AWS's
+      # own hash of the deployed zip package -- a different hash domain
+      # than `subject-digest` above (a content-tar hash over the built
+      # package's extracted files, chosen so the digest survives a
+      # zip-artifact round-trip through GitHub Actions -- see "Compute
+      # attestation subject from the built SAM package"'s own comment).
+      # The two are never compared for equality here; deliberately not
+      # trying to make them the same value. This step exists so an
+      # auditor has an AWS-native, independently-queryable identifier
+      # (`aws lambda get-function-configuration`) for what's genuinely
+      # running, recorded alongside this run's own attested subject-digest
+      # rather than only ever trusting this pipeline's own claim.
+      # continue-on-error: true -- the deploy role's IAM policy isn't
+      # committed as code anywhere in this repo (a separate, tracked
+      # audit gap -- see the Lucid vault's #12 milestone note), so
+      # whether it already includes lambda:GetFunctionConfiguration isn't
+      # something this change can confirm ahead of a real run; a missing
+      # permission here must never fail an otherwise-successful deploy.
+      - name: Capture live Lambda code identity (best-effort, diagnostic)
+        continue-on-error: true
+        run: |
+          CODE_SHA256="$(aws lambda get-function-configuration \
+            --function-name lucid-attest-service-sign \
+            --query 'CodeSha256' --output text)"
+          {
+            echo "### Live Lambda code identity"
+            echo ""
+            echo "- Function: \`lucid-attest-service-sign\`"
+            echo "- AWS CodeSha256 (hash of the deployed zip, AWS's own value): \`$CODE_SHA256\`"
+            echo "- This run's attested subject-digest (content-tar hash, see build job): \`${{ needs.build.outputs.subject-digest }}\`"
+            echo ""
+            echo "These are two different hash domains over the same package -- not expected to be equal, both recorded for independent auditability."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The actual close-the-loop gate: proves the function `sam deploy`
+      # just updated genuinely signs through real Fulcio/Rekor right now,
+      # not just that CloudFormation reported success. Mirrors
+      # smoke-test-sign.yml's own real-sign + real-Rekor-entry checks
+      # (that workflow proved this exact request/response shape works;
+      # this step is the same check, wired into the deploy gate itself
+      # instead of staying manual-only) -- but binds the test statement's
+      # subject to this run's own real attested digest, not a fixed
+      # synthetic placeholder, so the resulting Rekor entry is provably
+      # tied to this specific deploy rather than a generic ping. A
+      # failure here fails the whole `deploy` job: an update that reached
+      # CloudFormation but can't actually sign is not a successful
+      # deploy by this platform's own definition of what this service is
+      # for.
+      - name: Mint ambient OIDC identity token (post-deploy check)
+        id: verify-live
+        uses: ./.github/actions/mint-sigstore-oidc-token
+      - name: Post-deploy functional verification (real Sigstore sign + Rekor)
+        env:
+          OIDC_TOKEN: ${{ steps.verify-live.outputs.token }}
+          SUBJECT_NAME: ${{ needs.build.outputs.subject-name }}
+          SUBJECT_DIGEST: ${{ needs.build.outputs.subject-digest }}
+        run: |
+          digest_hex="${SUBJECT_DIGEST#sha256:}"
+          statement='[{
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"name": "'"$SUBJECT_NAME"'", "digest": {"sha256": "'"$digest_hex"'"}}],
+            "predicateType": "https://lucid-provenance.io/attestations/post-deploy-verification/v1",
+            "predicate": {"note": "deploy job'"'"'s own post-deploy functional gate, not a manual smoke test", "run_id": "${{ github.run_id }}", "deployed_sha": "${{ github.sha }}"}
+          }]'
+
+          http_code="$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$SIGN_ENDPOINT" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -d "$statement")"
+
+          echo "HTTP status: $http_code"
+          cat response.json
+          echo
+
+          if [ "$http_code" != "200" ]; then
+            echo "ERROR: expected HTTP 200 from the just-deployed endpoint, got $http_code" >&2
+            exit 1
+          fi
+
+          envelope_count="$(jq '.envelopes | length' response.json)"
+          if [ "$envelope_count" != "1" ]; then
+            echo "ERROR: expected exactly 1 envelope, got $envelope_count" >&2
+            exit 1
+          fi
+
+          sig="$(jq -r '.envelopes[0].signatures[0].sig' response.json)"
+          if [ -z "$sig" ] || [ "$sig" = "null" ]; then
+            echo "ERROR: no signature present in the response" >&2
+            exit 1
+          fi
+
+          log_index="$(jq -r '.envelopes[0]._rekor.logIndex' response.json)"
+          log_url="$(jq -r '.envelopes[0]._rekor.logUrl' response.json)"
+          if [ -z "$log_index" ] || [ "$log_index" = "null" ]; then
+            echo "ERROR: no Rekor transparency-log entry (_rekor.logIndex is null) -- the deployed function did not perform a real sign" >&2
+            exit 1
+          fi
+
+          {
+            echo "### Post-deploy verification: real sign confirmed"
+            echo ""
+            echo "The just-deployed function produced a genuine Sigstore signature and Rekor transparency-log entry:"
+            echo ""
+            echo "- Rekor log index: \`$log_index\`"
+            echo "- Rekor entry: $log_url"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Post-deploy verification passed. Rekor entry: $log_url"
