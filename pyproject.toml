@@ -38,13 +38,14 @@ dev = [
 # deployed API Gateway + Lambda (see tests/live/conftest.py's own
 # docstring) -- excluded from a bare `pytest tests/` (what `build`'s own
 # "Run tests with coverage" step runs), which has nothing real to talk
-# to. Invoked explicitly and separately (`pytest tests/live/...`) from
-# `deploy`'s own post-deploy step and regression-live.yml, once a real
-# deployed endpoint exists to test against -- same convention
-# lucid-dsse-collector's own pyproject.toml already established.
+# to. Invoked explicitly and separately, one file per staged step, from
+# `deploy`'s own post-deploy steps once a real deployed endpoint exists
+# to test against -- same convention lucid-dsse-collector's own
+# pyproject.toml already established (there is no scheduled/nightly
+# workflow here -- see assay.yml's `deploy` job's own comment for why).
 norecursedirs = ["live"]
 markers = [
-    "stress: signs a genuinely multi-statement batch through the real deployed Lambda, producing multiple real Rekor entries -- on-demand/nightly only, never run on every auto-post-deploy check.",
+    "stress: signs a genuinely multi-statement batch through the real deployed Lambda, producing multiple real Rekor entries -- runs as `deploy`'s own last, priciest staged step (Stage 4/4), reached only once every cheaper stage has already passed.",
 ]
 
 [tool.mutmut]

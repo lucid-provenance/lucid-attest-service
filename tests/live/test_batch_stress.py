@@ -8,12 +8,18 @@ statement size limit in this service worth stress-testing the way
 lucid-dsse-collector's own tests/live/test_payload_stress.py stress-
 tests payload *size*).
 
-`@pytest.mark.stress`, same convention as lucid-dsse-collector's own
-suite: on-demand/nightly only (see regression-live.yml), never part of
-assay.yml's `deploy` job's blocking gate. Doubly so here: this produces
-BATCH_SIZE real, permanent, public Rekor transparency-log entries in one
-run, not just one -- see conftest.py's own docstring for why the
-blocking tier is held to exactly one. BATCH_SIZE is deliberately modest
+`@pytest.mark.stress` -- borrowed from lucid-dsse-collector's own
+marker name, but a different meaning here: that repo uses it to keep an
+expensive case off a nightly/on-demand schedule; this platform doesn't
+run tests on a clock at all (see assay.yml's `deploy` job's own comment
+for why a schedule trigger was tried and removed the same day,
+2026-09-14). Here the marker exists so `pytest -m "not stress"` can
+still isolate this case locally -- assay.yml's `deploy` job runs it as
+its own last-and-priciest staged step (Stage 4/4), reached only once
+every cheaper stage has already passed. This produces BATCH_SIZE real,
+permanent, public Rekor transparency-log entries in one run, not just
+one -- see conftest.py's own docstring for why every earlier stage is
+held to zero. BATCH_SIZE is deliberately modest
 (5, not lucid-dsse-collector's "tens of MB" scale) -- large enough to
 exercise real sequential-signing behavior across multiple statements,
 small enough that five real Fulcio/Rekor round-trips comfortably clear

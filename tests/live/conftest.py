@@ -57,16 +57,22 @@ A cost/hygiene note the dsse-collector suite has no equivalent of: every
 test in this package that reaches `_sign_batch` (a request that clears
 both the API Gateway authorizer and app.py's own body validation) mints a
 REAL, PERMANENT, PUBLIC Rekor transparency-log entry -- not a
-side-effect-free assertion against a disposable test double. Only
-test_critical_path.py's one happy-path case does this; every other test
+side-effect-free assertion against a disposable test double.
+test_critical_path.py's one happy-path case does this once;
+test_batch_stress.py's does it BATCH_SIZE more times. Every other test
 here is rejected before signing (by the edge authorizer, for
 test_negative_security.py, or by app.py's own body validation, for
-test_request_validation.py) and produces no Rekor entry at all. Keep it
-that way: don't add a second real-signing case to the lean, blocking
-tier assay.yml's `deploy` job runs on every push to main -- put any
-additional real-signing case (e.g. a multi-statement batch) behind
-`@pytest.mark.stress` instead, so it only ever runs from
-regression-live.yml's nightly/on-demand cadence.
+test_request_validation.py) and produces no Rekor entry at all.
+
+assay.yml's `deploy` job runs every file in this package, on every real
+push to main -- there is no separate nightly/scheduled workflow (one was
+tried and removed the same day, 2026-09-14: this platform doesn't run
+tests on a clock, only against a real deploy). What keeps this cheap on
+the common case is staging: each file runs as its own step, in ascending
+order of real cost (negative-security -> request-validation ->
+critical-path -> stress), so GitHub Actions' own "stop the job at the
+first failing step" behavior means a real-signing step never runs at all
+once an earlier, free step has already failed.
 """
 from __future__ import annotations
 
