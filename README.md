@@ -11,7 +11,8 @@ narrow-vendoring discipline this service builds on.
 
 `POST /v1/sign` calls straight into `cli.oidc_signer.sign_statement`,
 vendored at deploy time from a pinned `lucid-assay` source SHA
-(`.github/workflows/deploy.yml`'s `SIGNER_SOURCE_SHA`) — the same
+(`.github/workflows/assay.yml`'s `deploy` job's own `SIGNER_SOURCE_SHA`
+— folded in from a wholly separate `deploy.yml` on 2026-09-14) — the same
 narrow-file, build-time-checkout pattern `lucid-attest`'s own Milestone
 #18 `build-signer-image.yml` uses, verified empirically to be an even
 narrower list than that image's (`cli/__init__.py`, `cli/common.py`,
@@ -160,9 +161,15 @@ trust.
 
 ## Deploy
 
-GitHub Actions (`.github/workflows/deploy.yml`) deploys on every push to
-`main`, via OIDC — no local `sam deploy` credentials needed for normal
-use. Two things happen before `sam build`:
+GitHub Actions (`.github/workflows/assay.yml`'s `deploy` job — folded
+in from a wholly separate `deploy.yml` on 2026-09-14, closing the same
+build/deploy race `lucid-dsse-collector` had already found and fixed:
+`deploy` now runs only after `build`/`attest`/`verify` all pass on the
+exact same commit, via `needs:`, instead of an independently
+`push`-triggered workflow with no ordering guarantee against this
+one) deploys on every push to `main`, via OIDC — no local `sam deploy`
+credentials needed for normal use. Two things happen before `sam
+build`:
 
 1. A read-only checkout of `lucid-assay` at the pinned `SIGNER_SOURCE_SHA`
    into `_signer/`.
@@ -192,9 +199,9 @@ adopting this service would copy.
 
 ## Local development
 
-Vendor the signer source by hand first (mirrors what `deploy.yml` does
-at deploy time — see its own comments for exactly why this is a
-build-time step, not a committed copy):
+Vendor the signer source by hand first (mirrors what `assay.yml`'s
+`deploy` job does at deploy time — see its own comments for exactly
+why this is a build-time step, not a committed copy):
 
 ```bash
 mkdir -p src/cli
@@ -204,8 +211,8 @@ cp /path/to/lucid-assay/cli/oidc_signer.py src/cli/oidc_signer.py
 ```
 
 Then `sam build --use-container && sam local invoke SignFunction`
-(`--use-container`: see `deploy.yml`'s own comment on why a plain local
-build isn't used here). A real Sigstore round-trip additionally needs a
+(`--use-container`: see `assay.yml`'s `deploy` job's own comment on why
+a plain local build isn't used here). A real Sigstore round-trip additionally needs a
 valid caller-supplied identity token in the invoke event's
 `Authorization` header — see `events/` (if present) or construct one by
 hand against the `handler(event, context)` shape in `src/app.py`.
