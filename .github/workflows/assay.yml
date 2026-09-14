@@ -926,77 +926,55 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # The actual close-the-loop gate: proves the function `sam deploy`
-      # just updated genuinely signs through real Fulcio/Rekor right now,
-      # not just that CloudFormation reported success. Mirrors
-      # smoke-test-sign.yml's own real-sign + real-Rekor-entry checks
-      # (that workflow proved this exact request/response shape works;
-      # this step is the same check, wired into the deploy gate itself
-      # instead of staying manual-only) -- but binds the test statement's
-      # subject to this run's own real attested digest, not a fixed
-      # synthetic placeholder, so the resulting Rekor entry is provably
-      # tied to this specific deploy rather than a generic ping. A
-      # failure here fails the whole `deploy` job: an update that reached
-      # CloudFormation but can't actually sign is not a successful
-      # deploy by this platform's own definition of what this service is
-      # for.
+      # just updated genuinely works right now, not just that
+      # CloudFormation reported success -- mirroring lucid-dsse-collector's
+      # own "Post-deploy smoke gate" step, adapted to this service's real
+      # shape (stateless, single-endpoint, OIDC-gated) rather than a
+      # file-for-file port. Ported from this step's own earlier inline
+      # bash version (2026-09-14) into tests/live/ as real, individually-
+      # reportable pytest cases -- see that package's conftest.py for the
+      # full rationale, including why only test_critical_path.py's one
+      # case is allowed to actually sign (a real, permanent, public Rekor
+      # transparency-log entry per invocation -- see that file). Runs a
+      # lean, blocking subset only: test_negative_security.py (no
+      # ambient identity needed) and test_critical_path.py (needs a real
+      # one, minted below). test_request_validation.py and the
+      # `stress`-marked batch case are deliberately left to
+      # regression-live.yml's own nightly/on-demand cadence, same
+      # reasoning lucid-dsse-collector's own smoke-vs-regression split
+      # uses -- keep this gate fast and let a slower/heavier check never
+      # block shipping a fix.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install this repo's own test dependencies
+        run: uv sync --frozen --extra dev --no-build --no-install-project
+
       - name: Mint ambient OIDC identity token (post-deploy check)
         id: verify-live
         uses: ./.github/actions/mint-sigstore-oidc-token
-      - name: Post-deploy functional verification (real Sigstore sign + Rekor)
+
+      - name: Post-deploy smoke gate (auth boundary / real sign + Rekor)
         env:
-          OIDC_TOKEN: ${{ steps.verify-live.outputs.token }}
-          SUBJECT_NAME: ${{ needs.build.outputs.subject-name }}
-          SUBJECT_DIGEST: ${{ needs.build.outputs.subject-digest }}
+          # Routed through env explicitly rather than relying on
+          # conftest.py's own hardcoded default matching SIGN_ENDPOINT
+          # above -- the same "don't trust two copies of a literal to
+          # stay in sync silently" discipline this repo already applies
+          # elsewhere (see SIGN_ENDPOINT's own comment).
+          LIVE_SIGN_ENDPOINT: ${{ env.SIGN_ENDPOINT }}
+          LIVE_OIDC_TOKEN: ${{ steps.verify-live.outputs.token }}
         run: |
-          digest_hex="${SUBJECT_DIGEST#sha256:}"
-          statement='[{
-            "_type": "https://in-toto.io/Statement/v1",
-            "subject": [{"name": "'"$SUBJECT_NAME"'", "digest": {"sha256": "'"$digest_hex"'"}}],
-            "predicateType": "https://lucid-provenance.io/attestations/post-deploy-verification/v1",
-            "predicate": {"note": "deploy job'"'"'s own post-deploy functional gate, not a manual smoke test", "run_id": "${{ github.run_id }}", "deployed_sha": "${{ github.sha }}"}
-          }]'
-
-          http_code="$(curl -sS -o response.json -w '%{http_code}' \
-            -X POST "$SIGN_ENDPOINT" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OIDC_TOKEN" \
-            -d "$statement")"
-
-          echo "HTTP status: $http_code"
-          cat response.json
-          echo
-
-          if [ "$http_code" != "200" ]; then
-            echo "ERROR: expected HTTP 200 from the just-deployed endpoint, got $http_code" >&2
-            exit 1
-          fi
-
-          envelope_count="$(jq '.envelopes | length' response.json)"
-          if [ "$envelope_count" != "1" ]; then
-            echo "ERROR: expected exactly 1 envelope, got $envelope_count" >&2
-            exit 1
-          fi
-
-          sig="$(jq -r '.envelopes[0].signatures[0].sig' response.json)"
-          if [ -z "$sig" ] || [ "$sig" = "null" ]; then
-            echo "ERROR: no signature present in the response" >&2
-            exit 1
-          fi
-
-          log_index="$(jq -r '.envelopes[0]._rekor.logIndex' response.json)"
-          log_url="$(jq -r '.envelopes[0]._rekor.logUrl' response.json)"
-          if [ -z "$log_index" ] || [ "$log_index" = "null" ]; then
-            echo "ERROR: no Rekor transparency-log entry (_rekor.logIndex is null) -- the deployed function did not perform a real sign" >&2
-            exit 1
-          fi
-
-          {
-            echo "### Post-deploy verification: real sign confirmed"
-            echo ""
-            echo "The just-deployed function produced a genuine Sigstore signature and Rekor transparency-log entry:"
-            echo ""
-            echo "- Rekor log index: \`$log_index\`"
-            echo "- Rekor entry: $log_url"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          echo "Post-deploy verification passed. Rekor entry: $log_url"
+          mkdir -p build
+          uv run --no-sync --no-build python3 -m pytest \
+            tests/live/test_negative_security.py \
+            tests/live/test_critical_path.py \
+            --junitxml=build/live-smoke-junit.xml \
+            -v
