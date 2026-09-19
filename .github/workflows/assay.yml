@@ -106,7 +106,7 @@ env:
   # --query "Stacks[0].Outputs[?OutputKey=='SignEndpoint'].OutputValue"`
   # if it ever changes.
   SIGN_ENDPOINT: https://84qfszyk5h.execute-api.us-east-1.amazonaws.com/v1/sign
-  ASSAY_CLI_SHA: f1b9bc30dd851398c80830380c31a27bee5d2c25 # lucid-assay main: PR #100 (fix(mutation-testing): combine stdout+stderr instead of preferring stderr), 2026-09-14. Jumps this pin forward ~20 PRs (was PR #81/#82, 2026-09-04) specifically to bring in mutation testing (introduced PR #96, absent entirely at the old pin) -- this repo needed a real pyproject.toml/uv.lock/[tool.mutmut] first (added the same day, see build's own "Install this repo's own runtime + test dependencies" step) since _run_mutmut()'s `uv run --with mutmut==<pinned> --no-sync` requires an already-synced project venv to reuse, which this repo never had. Every CLI flag this workflow already depends on (--min-rcs, --expected-repository/--ref/--workflow, --cert-identity/--cert-oidc-issuer, --slsa-envelope, --require-slsa-build-l3, --write-verdict, --subject-name/--subject-digest, --coverage-report, --junit-xml, --sbom, --head-sha, --repository, --branch, --github-token, --repo-dir) confirmed still present at the new pin before bumping, not assumed. Real first measurement, confirmed by an actual local mutmut run against this exact pyproject.toml/uv.lock before this pin ever shipped: 105/142 mutants killed (73.9%, the "degraded" tier, ×0.85 multiplier). Closed same day, not left as a gap: added exact-message/exact-shape assertions to tests/test_app.py (status-code-only assertions were letting mangled/nulled error messages, missing response headers, and a mis-serialized signing payload all survive) -- re-measured at 136/142 (95.8%, "passed" tier, ×1.0 multiplier). The residual 6 survivors are genuine equivalent mutants, confirmed empirically and documented in src/app.py's own module docstring (not chased -- there is no input for which they behave differently).
+  ASSAY_CLI_SHA: beb74d889cc30de031129909f2ef150119d4832d # lucid-assay main: PR #105's merge (feat(functional-adequacy): add functional test adequacy evaluation), 2026-09-19. Supersedes the PR #100 pin (2026-09-14, mutation testing) -- that pin predates predicate.functional_verification entirely, so this repo's own real attestations carried mutation_testing but not functional_verification at all, same gap lucid-console's own new FunctionalVerificationPanel just hit. Every CLI flag this workflow already depends on (--min-rcs, --expected-repository/--ref/--workflow, --cert-identity/--cert-oidc-issuer, --slsa-envelope, --require-slsa-build-l3, --write-verdict, --subject-name/--subject-digest, --coverage-report, --junit-xml, --sbom, --head-sha, --repository, --branch, --github-token, --repo-dir) confirmed still present at the new pin before bumping, not assumed -- no new required argument was added between PR #100 and PR #105. Confirmed via `git merge-base --is-ancestor` against lucid-assay's origin/main, and a real green run of lucid-assay's own dogfood Score & attest workflow at this exact commit (https://github.com/lucid-provenance/lucid-assay/actions/runs/35471906047). This repo has no .lucid/functional-verification.json yet, so expect predicate.functional_verification to report adequacy.status="not_configured" honestly until one is added -- unrelated to this repo's own, differently-named post-deploy functional-verification smoke-test step referenced above (SIGN_ENDPOINT), which is a live health check, not lucid-assay's declared-journeys contract. mutation_testing is unaffected by this bump (already working since the PR #100 pin).
 
 jobs:
   # Runs this repo's own tests against the vendored cli.oidc_signer,
@@ -240,10 +240,17 @@ jobs:
       # not a separate flag to add. `uv run --no-sync` (not a bare
       # `python3 -m pytest`), so this genuinely runs inside the venv
       # `uv sync` above just created, not the runner's own system Python.
+      # `--no-build` alongside it is a defense-in-depth no-op, not a
+      # behavior change -- `--no-sync` already means `uv run` never
+      # installs/builds anything at all here, but SonarQube's generic
+      # arbitrary-code-execution-via-setup-script rule pattern-matches on
+      # any package-manager invocation missing it, so it's added to
+      # satisfy that check explicitly rather than leave a real open
+      # Security finding on a line that was already safe.
       - name: Run tests with coverage
         run: |
           mkdir -p build
-          uv run --no-sync python3 -m pytest -v --junitxml=build/junit.xml --cov=src --cov-report=xml:build/coverage.xml tests/
+          uv run --no-sync --no-build python3 -m pytest -v --junitxml=build/junit.xml --cov=src --cov-report=xml:build/coverage.xml tests/
 
       - name: Lint SAM template
         uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
