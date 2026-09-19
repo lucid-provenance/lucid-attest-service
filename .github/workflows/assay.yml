@@ -240,10 +240,17 @@ jobs:
       # not a separate flag to add. `uv run --no-sync` (not a bare
       # `python3 -m pytest`), so this genuinely runs inside the venv
       # `uv sync` above just created, not the runner's own system Python.
+      # `--no-build` alongside it is a defense-in-depth no-op, not a
+      # behavior change -- `--no-sync` already means `uv run` never
+      # installs/builds anything at all here, but SonarQube's generic
+      # arbitrary-code-execution-via-setup-script rule pattern-matches on
+      # any package-manager invocation missing it, so it's added to
+      # satisfy that check explicitly rather than leave a real open
+      # Security finding on a line that was already safe.
       - name: Run tests with coverage
         run: |
           mkdir -p build
-          uv run --no-sync python3 -m pytest -v --junitxml=build/junit.xml --cov=src --cov-report=xml:build/coverage.xml tests/
+          uv run --no-sync --no-build python3 -m pytest -v --junitxml=build/junit.xml --cov=src --cov-report=xml:build/coverage.xml tests/
 
       - name: Lint SAM template
         uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
