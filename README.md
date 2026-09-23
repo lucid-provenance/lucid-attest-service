@@ -127,6 +127,35 @@ jobs:
       subject-digest: ${{ needs.build.outputs.image-digest }}
 ```
 
+**Signing more than once in one run (2026-09-23).** A run can call this workflow
+twice -- `lucid-dsse-collector` signs its build-time statements after `build`, and
+its post-deploy deployment-verification statement after `post-deploy-tests` -- but a
+run cannot hold two artifacts of the same name, and the default output artifact is
+`signed-statements`. Give the second call its own `signed-artifact-name`, and give
+its job a name your `verify` job's `uses:` parse won't match (the collector's is
+`attest-cd`, so its awk on the job literally named `attest:` still finds the
+build-time signer). Both calls sign as the same reviewed identity, so a verifier
+that trusts this workflow trusts both:
+
+```yaml
+  attest-cd:
+    needs: [deploy, post-deploy-tests]
+    permissions:
+      id-token: write
+      contents: read
+    uses: lucid-provenance/lucid-attest-service/.github/workflows/sign-client.yml@<pinned-sha>
+    with:
+      artifact-name: unsigned-deployment-verification
+      statement-files: |
+        deployment-verification.unsigned.json
+      signed-artifact-name: signed-deployment-verification
+```
+
+The input first exists at PR #43's merge (`d487772`), so a caller passing it must pin at
+or after that commit -- an older pin rejects the unknown input and the job never starts.
+Omit `subject-name`/`subject-digest` when there is no build artifact to attach SLSA
+provenance to (a deployment event has none).
+
 **Deriving `--cert-identity` for your own `verify` job: don't duplicate
 the pin.** GitHub Actions won't accept an expression in a reusable-
 workflow `uses:` line, which makes it tempting to also keep the SHA in a
