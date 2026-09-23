@@ -49,10 +49,15 @@ on:
         required: false
         type: string
         default: ""
+      signed-artifact-name:
+        description: "Name of the workflow-run artifact this job uploads the signed *.dsse.json envelopes to. Defaults to `signed-statements`. A caller invoking this workflow more than once in one run (e.g. a build-time pass and a post-deploy pass) must give each call a distinct name -- upload-artifact rejects a duplicate name within a run."
+        required: false
+        type: string
+        default: "signed-statements"
     outputs:
       artifact-name:
         description: "Name of the workflow-run artifact this job uploads the signed *.dsse.json envelopes to"
-        value: signed-statements
+        value: ${{ jobs.sign.outputs.artifact-name }}
 
 permissions: {}
 
@@ -100,6 +105,8 @@ env:
 jobs:
   sign:
     runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ inputs.signed-artifact-name }}
     permissions:
       id-token: write # Required for Sigstore keyless OIDC minting -- see file header
       contents: read
@@ -276,6 +283,6 @@ jobs:
       - name: Upload Signed Statements
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: signed-statements
+          name: ${{ inputs.signed-artifact-name }}
           path: signed/
           if-no-files-found: error

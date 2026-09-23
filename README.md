@@ -103,7 +103,9 @@ trusted context (`cli.provenance`, checked out from a pinned
 signing both the caller's statement(s) and the provenance atomically —
 same input/output contract as `sign.yml` (`artifact-name`,
 `statement-files`, optional `subject-name`/`subject-digest`, outputs
-`artifact-name: signed-statements`), so adopting it from an existing
+`artifact-name: signed-statements` by default; an optional
+`signed-artifact-name` input renames it, required when one run calls this
+workflow more than once, since a run can't hold two artifacts of one name), so adopting it from an existing
 `sign.yml` caller is a `uses:` swap, not a rewrite:
 
 ```yaml
