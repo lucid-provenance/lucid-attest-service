@@ -128,6 +128,15 @@ CloudFormation permissions are scoped to that exact name.
 Rekor entry that can never be deleted. Nothing here runs on a schedule; the
 end-to-end workflows are manual for that reason.
 
+**13. Every call to the workflow is its own signing pass, and its artifact needs its own name.**
+A caller may sign more than once per run (build-time statements, then a post-deploy
+one). Each call mints its own OIDC token and signs independently as the same
+reviewed identity, so nothing about one call constrains another -- except that
+GitHub rejects two artifacts of one name in a run. `signed-artifact-name` (default
+`signed-statements`, so existing callers are unaffected) exists for that, and the
+output `artifact-name` reports what was used. A call that has no build artifact
+omits `subject-name`/`subject-digest` and gets no SLSA provenance.
+
 ## 4. Directory architecture
 
 | Path | Owns |
