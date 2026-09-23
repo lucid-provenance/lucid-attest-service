@@ -189,7 +189,7 @@ jobs:
       # than reproducing PROVENANCE_SOURCE_SHA's self-pin pattern here.
       - name: Mint ambient OIDC identity token (audience sigstore)
         id: oidc
-        uses: lucid-provenance/lucid-attest-service/.github/actions/mint-sigstore-oidc-token@b85a2c7b9476386ab70004b184a7dd8029866f07
+        uses: lucid-provenance/lucid-attest-service/.github/actions/mint-sigstore-oidc-token@5ae45e8032489807390b9254cbe529dd102e8839
 
       # Builds one JSON array from every file the caller named (plus the
       # just-constructed provenance statement, if any -- appended here,
