@@ -156,7 +156,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -253,7 +253,7 @@ jobs:
           uv run --no-sync --no-build python3 -m pytest -v --junitxml=build/junit.xml --cov=src --cov-report=xml:build/coverage.xml tests/
 
       - name: Lint SAM template
-        uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
+        uses: aws-actions/setup-sam@341eee193f458fa5aae5d52c94b0c5cf3a1c5a52 # v3
       - run: sam validate --lint
 
       # Generates a canonical CycloneDX SBOM of this repo via Syft, fed to
@@ -390,7 +390,7 @@ jobs:
       # digest differs" into "here are the exact files that differ,"
       # rather than a fourth guess.
       - name: Upload build-side file list (diagnostic)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sam-build-filelist
           path: build/sam-filelist.txt
@@ -413,7 +413,7 @@ jobs:
       # `sam build` at all. Same upload-artifact pin already used below
       # for unsigned-statements, for consistency.
       - name: Upload SAM build output (deploy job consumes this, never rebuilds)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sam-build-output
           path: .aws-sam/build/
@@ -517,7 +517,7 @@ jobs:
           }
 
       - name: Upload unsigned statements
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-statements
           path: |
@@ -595,7 +595,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: "_assay/uv.lock"
@@ -625,7 +625,7 @@ jobs:
             sigstore-tuf-${{ runner.os }}-
 
       - name: Download signed statements
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: signed-statements
           path: build
@@ -673,7 +673,7 @@ jobs:
           cd _assay && uv run --no-sync python -m cli.verify ../build/lucid-attest-service.dsse.json "${VERIFY_ARGS[@]}"
 
       - name: Upload signed attestations
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lucid-attest-service-attestation
           path: |
@@ -804,7 +804,7 @@ jobs:
       # reference CI/CD pipelines document, not an unusual pattern
       # invented here.
       - name: Download SAM build output (never rebuilds)
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sam-build-output
           path: .aws-sam/build/
@@ -815,7 +815,7 @@ jobs:
       # into whether the file *set* or the file *content* was actually
       # diverging).
       - name: Download build-side file list (diagnostic)
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sam-build-filelist
           path: build-side
@@ -867,7 +867,7 @@ jobs:
 
       # Still needed for the `sam` CLI binary itself (sam deploy below),
       # even though this job never calls `sam build` any more.
-      - uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
+      - uses: aws-actions/setup-sam@341eee193f458fa5aae5d52c94b0c5cf3a1c5a52 # v3
 
       # --s3-bucket named explicitly, not --resolve-s3: the deploy role's
       # IAM policy is scoped to this one bucket by name (no s3:CreateBucket
@@ -997,7 +997,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
